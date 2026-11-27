@@ -100,6 +100,12 @@ DEX_PATCHES = {
         ("LD3/e;->K()Z (Native Photo SAT hasSATCamera roleId 60 -> 62)", 0x4B7CAA, "13023c00", "13023e00"),
         ("StopPointScaleZoomSliderDrawAdapter;->initValue (0.6f lower bound)", 0x5C9F68, "38030500", "28050000"),
         ("Lw5/e;->B3 (isZoomRatioSupported = true)", 0x88CF00, "120038053d00", "12100f000000"),
+        # v1.1 quality, LDC, and video bitrate patches
+        ("Lw5/e;->V (default sharpness 1 -> 0 anti-oversharpen)", 0x88FC98, "12107110c2d00000", "12000f0000000000"),
+        ("Lw5/E;->u0 (apply sharpness=0 in Video+Photo; keep Pro manual)", 0x86AC8E, "52228ede12f032020900", "52228ede3b0203001202"),
+        ("Lw5/E;->H0 (bypass B0 check so applyUltraWideLDC sends level=1)", 0x868CAE, "38020b00", "00000000"),
+        ("BaseModule;->updateUltraWideLDC (bypass B0 check for SAT UW LDC)", 0x514994, "38002e00", "00000000"),
+        ("video/I;->a (HEVC bitrate 2x boost: 15.4M->30.8M, 38.5M->77M)", 0x560704, "280f5277553f280c6e2027d103000c002321782b7130032c04015277553f", "280a5277553f280c5277553f0f07000000000000da0707020f0700000000"),
     ],
     "classes3.dex": [
         ("LG6/d;->j (clamp maxZoom to real HAL 10x Photo / 6x Video)", 0x1A7874, "5411ad00", "12011101"),
