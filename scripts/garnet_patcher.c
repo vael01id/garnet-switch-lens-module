@@ -405,11 +405,12 @@ static const uint8_t RULE_BLOB[] = {
     0xe9,0xe7,0x05,0xb9,0x09,0x65,0x47,0xb9,0xff,0xfb,0x05,0xb9,0x29,0x06,0x00,0x34,
     0xbf,0x16,0x00,0x71,0x80,0x02,0x00,0x54,0xbf,0x0a,0x00,0x71,
     0x31,0x00,0x00,0x14,
-    /* v1.2 camera.qcom.so ConstructDefaultRequestSettings: ANDROID_NOISE_REDUCTION_MODE -> MINIMAL (3) */
+    /* v1.2 camera.qcom.so ConstructDefaultRequestSettings: ANDROID_NOISE_REDUCTION_MODE -> FAST (1)
+     * Keeps hardware Chroma NR (CNR + CLPF + TF Chroma) 100% active while TF201 + ANR101 Luma hooks below remove watercolor smearing. */
     0xe2,0x0f,0x06,0xbd,0xe0,0x13,0x06,0xbd,0xeb,0x17,0x06,0xb9,0x2a,0x06,0x00,0x34,
     0xbf,0x16,0x00,0x71,0x80,0x02,0x00,0x54,0xbf,0x0a,0x00,0x71,0x61,0x04,0x00,0x54,
     0xeb,0x03,0x1f,0xaa,
-    0x68,0x00,0x80,0x52,0xe8,0x1b,0x06,0xb9,0x2f,0x00,0x00,0x14,
+    0x28,0x00,0x80,0x52,0xe8,0x1b,0x06,0xb9,0x2f,0x00,0x00,0x14,
 };
 
 typedef struct {
@@ -423,7 +424,24 @@ typedef struct {
 static const PatRule CAMQCOM_RULES[] = {
     {0, 28, 12, 28, 4},       /* 0xfda2d0: QSAT / multi-cam bypass */
     {2282, 28, 12, 2310, 4},  /* 0x665968: ConstructDefaultRequestSettings EDGE_MODE -> OFF (0) */
-    {2314, 36, 12, 2350, 12}, /* 0x665a88: ConstructDefaultRequestSettings NR_MODE -> MINIMAL (3) */
+    {2314, 36, 12, 2350, 12}, /* 0x665a88: ConstructDefaultRequestSettings NR_MODE -> FAST (1) */
+};
+
+/* Titan480/570 TF20/TF201: zero Luma temporal blend (a2MaxY/a2MinY/constBlendY=0), keep Chroma (a2MaxC/a2MinC/constBlendC) 100% untouched */
+static const uint8_t TF201_LUMA_CTX[] = {
+    0x09,0x2d,0x45,0x39,0xa9,0x42,0x1e,0xb8,0x09,0x29,0x45,0x39,0xa9,0xc2,0x1d,0xb8,
+    0x09,0x25,0x45,0x39,0xa9,0x02,0x1e,0xb8,0x09,0x21,0x45,0x39,0xa9,0x82,0x1d,0xb8,
+    0x09,0x35,0x45,0x39,0xa9,0xc2,0x1e,0xb8,0x08,0x31,0x45,0x39,0x04,0x00,0x00,0x14,
+    0xe8,0x03,0x1f,0x2a
+};
+static const uint8_t TF201_LUMA_REP[] = {
+    0xe9,0x03,0x1f,0x2a,0xa9,0x02,0x1e,0xb8,0xe9,0x03,0x1f,0x2a,0xa9,0x82,0x1d,0xb8,
+    0x09,0x35,0x45,0x39,0xa9,0xc2,0x1e,0xb8,0xe8,0x03,0x1f,0x2a
+};
+/* Titan570 ANR101_480::Process exit hook: bypass Luma spatial NR (YLPF_FILTERING + DCBlend2_Bypass_Luma) while keeping Chroma CLPF + CNR 100% active */
+static const uint8_t ANR101_HOOK_CTX[] = {
+    0xe7,0x58,0x0a,0x91,0x28,0x00,0x80,0x52,0xbc,0xfe,0xff,0x17,0xf3,0x03,0x1f,0x2a,
+    0xf4,0x33,0x40,0xf9,0x88,0x16,0x40,0xf9,0xa9,0x83,0x5e,0xf8
 };
 
 static const PatRule MCREPROCRT_RULES[] = {
@@ -560,10 +578,8 @@ static const char CAMX_KEYS_FLAT[] =
     "multiCameraSWFrameSyncType=SOFSync\0"
     "isNCSFlushFenceJobEnabled=TRUE\0"
     "disableTFRefinement=TRUE\0"
-    "enableLDC=TRUE\0"
-    "enableMCTF=FALSE\0"
-    "enableIPEAutoNoiseReduction=FALSE\0";
-#define NCAMX_KEYS 15
+    "enableLDC=TRUE\0";
+#define NCAMX_KEYS 13
 
 static const char *get_camx_key(int idx) {
     const char *p = CAMX_KEYS_FLAT;
@@ -636,6 +652,42 @@ static int cmd_patch_hal(const char *kind, const char *src, const char *dst) {
 
     if (xstrcmp(kind, "camera_qcom") == 0) {
         edits += apply_pat_rules(buf, sz, CAMQCOM_RULES, sizeof(CAMQCOM_RULES)/sizeof(CAMQCOM_RULES[0]));
+        /* TF20/TF201 Luma-Only temporal blend = 0 (keep Chroma temporal denoising 100% active) */
+        size_t pos = 0;
+        while ((pos = find_bytes(buf, sz, TF201_LUMA_CTX, sizeof(TF201_LUMA_CTX), pos)) != (size_t)-1) {
+            memcpy(buf + pos + 16, TF201_LUMA_REP, sizeof(TF201_LUMA_REP));
+            edits++;
+            pos += sizeof(TF201_LUMA_CTX);
+        }
+        /* ANR101 Luma-Only spatial bypass RX cave hook (keep Chroma CLPF + CNR 100% active) */
+        size_t hpos = 0;
+        if (find_unique(buf, sz, ANR101_HOOK_CTX, sizeof(ANR101_HOOK_CTX), &hpos) == 1) {
+            uint64_t hook_pc = hpos + 12;
+            uint64_t cave = 0;
+            if (alloc_rx_cave(buf, sz, 16, 0x50, &cave) == 0) {
+                static const uint32_t anr_cave[15] = {
+                    0xf9402fe8u, /* ldr  x8, [sp, #0x58] */
+                    0xf9401908u, /* ldr  x8, [x8, #0x30] */
+                    0xb4000188u, /* cbz  x8, done        */
+                    0xf94037e9u, /* ldr  x9, [sp, #0x68] */
+                    0xb4000149u, /* cbz  x9, done        */
+                    0xb941150au, /* ldr  w10, [x8, #0x114] */
+                    0x321f014au, /* orr  w10, w10, #0x2  */
+                    0xb901150au, /* str  w10, [x8, #0x114] */
+                    0xb940b90au, /* ldr  w10, [x8, #0xb8]  */
+                    0x3200014au, /* orr  w10, w10, #0x1  */
+                    0xb900b90au, /* str  w10, [x8, #0xb8]  */
+                    0x91147108u, /* add  x8, x8, #0x51c  */
+                    0xf1000529u, /* subs x9, x9, #1      */
+                    0x54ffff01u, /* b.ne loop            */
+                    0x2a1f03f3u  /* mov  w19, wzr (done) */
+                };
+                for (int i = 0; i < 15; i++) wr32(buf + cave + (uint64_t)i * 4, anr_cave[i]);
+                wr32(buf + cave + 60, arm64_b(cave + 60, hook_pc + 4, 0));
+                wr32(buf + hook_pc, arm64_b(hook_pc, cave, 0));
+                edits++;
+            }
+        }
     } else if (xstrcmp(kind, "mcreprocrt") == 0) {
         edits += apply_pat_rules(buf, sz, MCREPROCRT_RULES, sizeof(MCREPROCRT_RULES)/sizeof(MCREPROCRT_RULES[0]));
     } else if (xstrcmp(kind, "feature2_generic") == 0) {

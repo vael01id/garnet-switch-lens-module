@@ -12,7 +12,7 @@ Universal Magisk / KernelSU / APatch module to fix multi-camera support and nati
 - Native lens switching (`0.6x` ↔ `1x` ↔ `2x` / `3x` / `5x`) in Photo and Video mode with live zoom slider
 - Smoother zoom transition when tapping zoom buttons
 - UltraWide (`0.6x`), Macro, 64MP, and Pro mode
-- Minimal Noise Reduction & zero oversharpening in Photo + Video (`ANDROID_NOISE_REDUCTION_MODE=MINIMAL`, `ANDROID_EDGE_MODE=OFF` in HAL defaults, `sharpness=0` while keeping Pro manual control, plus CamX `disableTFRefinement=TRUE`, `enableMCTF=FALSE`, `enableIPEAutoNoiseReduction=FALSE`) to eliminate heavy watercolor smearing in low light
+- Surgical Luma-only Noise Reduction bypass + zero oversharpening in Photo & Video (`ANDROID_EDGE_MODE=OFF`, `sharpness=0` while keeping Pro manual control, Titan570 `TF201` Luma temporal blend = `0`, and `ANR101` Luma spatial `YLPF` / `DCBlend2` bypassed) while keeping **100% hardware Chroma NR (`TF Chroma` + `ANR CLPF` + `CNR`) active** — removes watercolor smearing without rainbow color noise
 - Active `0.6x` UltraWide distortion correction (`applyUltraWideLDC` / `applySATUltraWideLDC` + `enableLDC=TRUE`)
 - Higher video bitrates for cleaner low-light detail (H.264 `1080p30`: 20 → 40 Mbps, `4K30`/`1080p60`: 50 → 75 Mbps; HEVC `1080p30`: 15.4 → 30.8 Mbps, `4K30`: 38.5 → 77 Mbps)
 - 1080p 60fps on main/video zoom, auto fallback to 1080p 30fps on UltraWide, Front, and Macro
