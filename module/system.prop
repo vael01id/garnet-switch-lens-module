@@ -1,0 +1,4 @@
+# Expose com.android.camera to Xiaomi/QTI HAL privileged & aux camera lists (<= 91 chars)
+persist.vendor.camera.privapp.list=com.android.camera,com.oplus.camera,com.oplus.engineercamera
+persist.camera.privapp.list=com.android.camera,com.oplus.camera,com.oplus.engineercamera
+vendor.camera.aux.packagelist=android,com.android.camera,com.oplus.camera,com.oplus.engineercamera

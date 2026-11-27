@@ -1,0 +1,11 @@
+* text=auto eol=lf
+*.sh text eol=lf
+*.prop text eol=lf
+*.txt text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.c text eol=lf
+update-binary text eol=lf
+updater-script text eol=lf
+*.gz binary
+module/bin/** binary

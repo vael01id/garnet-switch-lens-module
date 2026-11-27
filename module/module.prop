@@ -1,0 +1,6 @@
+id=garnet_oos16_uw_fix
+name=Garnet Native Lens Switch & Camera Fix
+version=v1.0
+versionCode=100
+author=Vael
+description=Restores full camera support for garnet (Poco X6 5G / Redmi Note 13 Pro 5G) on custom ROMs: native Photo & Video SAT lens switching, smooth 335ms zero-bounce ease-out zoom with 0.6x-5x quick buttons, SOFSync/FPSMatch/ExposureTimeMatch/SW2DLUT handoff sync, ultrawide/macro/64MP/Pro mode fixes, and FHD60 with auto UW 30fps EIS clamp.

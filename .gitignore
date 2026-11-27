@@ -1,0 +1,17 @@
+# Ignore large compiled binaries & local dumps (distributed via GitHub Releases)
+*.apk
+*.zip
+*.so
+*.bin
+*.dlc
+*.p12
+*.pk8
+*.jks
+diag/
+out/
+dist/
+build/
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
