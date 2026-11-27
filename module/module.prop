@@ -1,6 +1,6 @@
 id=garnet_oos16_uw_fix
 name=Garnet Native Lens Switch & Camera Fix
-version=v1.1
-versionCode=110
+version=v1.2
+versionCode=120
 author=Vael
-description=Universal camera & lens switch fix for garnet (Poco X6 5G / Redmi Note 13 Pro 5G): native Photo/Video SAT lens switching, smooth 0.6x-5x zoom, reduced oversharpening & temporal smearing, active 0.6x UltraWide LDC, boosted H.264/HEVC video bitrates, and FHD60 with auto UW 30fps clamp.
+description=Universal camera & lens switch fix for garnet (Poco X6 5G / Redmi Note 13 Pro 5G): native Photo/Video SAT lens switching, smooth 0.6x-5x zoom, lower HAL/CamX noise reduction & zero oversharpening (NR=FAST, Edge=OFF, MCTF/IPE ANR tuned), active 0.6x UltraWide LDC, boosted H.264/HEVC video bitrates, and FHD60 with auto UW 30fps clamp.
