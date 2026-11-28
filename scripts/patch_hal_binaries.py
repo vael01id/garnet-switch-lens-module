@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Reproducibly patches the 4 vendor HAL shared libraries for garnet (Poco X6 5G /
-Redmi Note 13 Pro 5G) on HyperOS 3 vendor OS3.0.304.0.WNRCNXM.
+Reproducibly applies all v1.6 patches to the 4 vendor HAL shared libraries for
+garnet (Poco X6 5G / Redmi Note 13 Pro 5G) on HyperOS 3 vendor OS3.0.304.0.WNRCNXM.
 
+Produces bit-for-bit identical outputs to `garnet_patcher patch-hal`.
 Every patch verifies the exact expected stock bytes before modifying anything.
 """
 import argparse
@@ -12,10 +13,38 @@ import os
 PATCHES = {
     "hw/camera.qcom.so": {
         "src_name": "camera.qcom.so",
-        "expected_sha256": "ad17d9da8d80945a32cce8b33f646320569e7182b4c61ccecae7f7ed992a6124",
+        "expected_sha256": "ad862897c60133b1950d3b2dcba5cd4413a549c4758c6212e863f040c56333ae",
         "hunks": [
-            # 0xfda2d0: QSAT / Video SAT compatibility branch (b.eq -> b)
-            (0xFDA2D0, "e00f0054", "8b000014"),
+            # Extend RX PT_LOAD filesz/memsz (+0x50) for ANR101 Luma-only bypass cave @0x1398050
+            (0x000000D0, "50", "a0"),
+            (0x000000D8, "50", "a0"),
+            # ConstructDefaultRequestSettings: ANDROID_EDGE_MODE -> OFF (0)
+            (0x00665968, "29060034", "31000014"),
+            # ConstructDefaultRequestSettings: ANDROID_NOISE_REDUCTION_MODE -> FAST (1)
+            (0x00665A88, "2a060034bf16007180020054", "28008052e81b06b92f000014"),
+            # Titan570 ANR101_480::Process exit hook -> b 0x1398050 (bypass Luma YLPF+DCBlend2, keep Chroma)
+            (0x00BA341C, "f3031f2a", "0dd31f14"),
+            # Titan480/570 TF20/TF201 instance #1: zero Luma temporal blend (a2MaxY/a2MinY/constBlendY=0)
+            (
+                0x00BC7720,
+                "09254539a9021eb809214539a9821db809354539a9c21eb808314539",
+                "e9031f2aa9021eb8e9031f2aa9821db809354539a9c21eb8e8031f2a",
+            ),
+            # Titan480/570 TF20/TF201 instance #2: zero Luma temporal blend (keep Chroma refinement active)
+            (
+                0x00C08FF0,
+                "09254539a9021eb809214539a9821db809354539a9c21eb808314539",
+                "e9031f2aa9021eb8e9031f2aa9821db809354539a9c21eb8e8031f2a",
+            ),
+            # QSAT / Video SAT compatibility branch (b.eq -> b)
+            (0x00FDA2D0, "e00f0054", "8b000014"),
+            # RX code cave @0x1398050: set YLPF & DCBlend2 bypass bits per pass while preserving Chroma CLPF+CNR
+            (
+                0x01398050,
+                "00" * 64,
+                "e82f40f9081940f9880100b4e93740f9490100b40a1541b94a011f320a1501b9"
+                "0ab940b94a0100320ab900b908711491290500f101ffff54f3031f2ae52ce017",
+            ),
         ],
     },
     "hw/com.qti.chi.override.so": {
@@ -82,7 +111,7 @@ def sha256_bytes(b: bytes) -> str:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Patch stock garnet OS3.0.304.0 camera HAL binaries")
+    ap = argparse.ArgumentParser(description="Apply v1.6 patches to stock garnet OS3.0.304.0 camera HAL binaries")
     ap.add_argument("--stock-dir", required=True, help="Directory containing stock vendor .so dumps")
     ap.add_argument("--out-dir", required=True, help="Output directory (mirrors system/vendor/lib64/)")
     args = ap.parse_args()
@@ -91,7 +120,8 @@ def main():
         src_path = os.path.join(args.stock_dir, spec["src_name"])
         if not os.path.isfile(src_path):
             raise FileNotFoundError(f"Missing stock binary: {src_path}")
-        buf = bytearray(open(src_path, "rb").read())
+        with open(src_path, "rb") as f:
+            buf = bytearray(f.read())
 
         for off, exp_hex, new_hex in spec["hunks"]:
             exp = bytes.fromhex(exp_hex)

@@ -29,7 +29,8 @@ def main():
                 # Safety guard: zero early-boot overlay files or static system.prop allowed
                 if rel.startswith(("system/", "vendor/")) or rel == "system.prop":
                     raise RuntimeError(f"Refusing to package early-boot overlay/prop file: {rel}")
-                data = open(full, "rb").read()
+                with open(full, "rb") as f:
+                    data = f.read()
                 if rel.endswith(TEXT_EXTS) or fn in ("update-binary", "updater-script"):
                     data = data.replace(b"\r\n", b"\n")
                 zi = zipfile.ZipInfo(rel)

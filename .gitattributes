@@ -5,6 +5,8 @@
 *.py text eol=lf
 *.md text eol=lf
 *.c text eol=lf
+*.h text eol=lf
+*.java text eol=lf
 update-binary text eol=lf
 updater-script text eol=lf
 *.gz binary

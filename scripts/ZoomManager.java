@@ -15,8 +15,8 @@ import java.lang.reflect.Method;
  */
 public final class ZoomManager {
     private static final String TAG = "GarnetZoomSmoother";
-    private static final float BASE_DURATION_MS = 300.0f;
-    private static final float TAU_MS = 0.35f * BASE_DURATION_MS; // ~105 ms (responsive early curve)
+    private static final float TAU_MS = 115.0f;                 // responsive ease-out time constant
+    private static final float ZOOM_OUT_ALPHA_SCALE = 0.703125f; // gentler log-zoom deceleration on zoom out (45/64)
     private static final float SNAP_EPSILON = 0.001f;
     private static final long MIN_VSYNC_DT_MS = 4L;
     private static final long MAX_ANIM_MS = 2000L;
@@ -212,9 +212,12 @@ public final class ZoomManager {
         }
 
         float next;
-        if (cur > 0.0f && target > 0.0f) {
+        if (target <= cur) {
+            // Zoom OUT: gentler log-zoom deceleration
+            alpha *= ZOOM_OUT_ALPHA_SCALE;
             next = (float) (cur * Math.pow(target / cur, alpha));
         } else {
+            // Zoom IN: responsive linear exponential ease-out
             next = cur + (target - cur) * alpha;
         }
 

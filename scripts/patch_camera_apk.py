@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """
-Applies all v1.0 DEX bytecode patches to the stock MIUI/Leica com.android.camera.apk
+Applies all v1.6 DEX bytecode patches and injects the 4-byte aligned STORED
+ZoomManager smoother (`classes8.dex`) into the stock MIUI/Leica `com.android.camera.apk`
 used on garnet OxygenOS 16 port.
 
-Note: After running this script, sign the output APK with v1 + v2/v3 AOSP testkey
-and 4096-byte zipalign all uncompressed .so/.dex/.arsc entries before installing.
+Produces a bit-for-bit identical output APK to `garnet_patcher patch-apk`.
+Note: For standalone installation (outside post-boot bind-mount), sign the output APK
+with v1 + v2/v3 keys and 4096-byte zipalign uncompressed .so/.dex/.arsc entries.
 """
 import argparse
 import hashlib
-import shutil
+import os
+import re
 import struct
 import zipfile
 import zlib
@@ -75,6 +78,21 @@ LZ1L_NEW = (
     "00000000"          # nop; nop
 )
 
+# video/z;->k (H.264 cooler bitrate boost: 1080p30 20M->40M, 4K30/1080p60 50M->60M)
+H264_EXP = (
+    "62024c306e10b00902000c0262033bd75263fc44526412452207fe23701060d1"
+    "07006e2066d137001a0370106e206ad137006e2066d147001a0391106e206ad1"
+    "37006e1077d107000c036e20a8d332000a04380437006e20acd332000c021f02"
+    "8b241b035d2c0100722022d432000a0438040d00722026d432000c031f03fc23"
+    "7110bad003000a032803020312001b04280f0100722022d442000a0738071000"
+    "54670445722026d442000c021f02fc237110bad002000a025972523f01322803"
+    "02021200"
+)
+H264_NEW = (
+    "02021200140340787d0135320500da020202285914030087930335325500da02"
+    "0206db020205284f" + ("00" * 156)
+)
+
 # Common->M0()[F: smooth ~500ms ease-out spline timing on L0=[0.5,1,2,5,10,15,50,125]
 M0_EXP_HEX = struct.pack("<8f", 0.0, 126.0, 253.0, 420.0, 547.0, 621.0, 840.0, 1000.0).hex()
 M0_NEW_HEX = struct.pack("<8f", 0.0, 600.0, 1100.0, 1650.0, 2065.0, 2315.0, 2915.0, 3365.0).hex()
@@ -101,11 +119,11 @@ DEX_PATCHES = {
         ("LD3/e;->K()Z (Native Photo SAT hasSATCamera roleId 60 -> 62)", 0x4B7CAA, "13023c00", "13023e00"),
         ("StopPointScaleZoomSliderDrawAdapter;->initValue (0.6f lower bound)", 0x5C9F68, "38030500", "28050000"),
         ("Lw5/e;->B3 (isZoomRatioSupported = true)", 0x88CF00, "120038053d00", "12100f000000"),
-        # v1.1 quality, LDC, and video bitrate patches
         ("Lw5/e;->V (default sharpness 1 -> 0 anti-oversharpen)", 0x88FC98, "12107110c2d00000", "12000f0000000000"),
         ("Lw5/E;->u0 (apply sharpness=0 in Video+Photo; keep Pro manual)", 0x86AC8E, "52228ede12f032020900", "52228ede3b0203001202"),
         ("Lw5/E;->H0 (bypass B0 check so applyUltraWideLDC sends level=1)", 0x868CAE, "38020b00", "00000000"),
         ("BaseModule;->updateUltraWideLDC (bypass B0 check for SAT UW LDC)", 0x514994, "38002e00", "00000000"),
+        ("video/z;->k (H.264 cooler bitrate boost: 20M->40M, 50M->60M)", 0x568B8E, H264_EXP, H264_NEW),
         ("video/I;->a (HEVC bitrate 1.33x cooler boost: 15.4M->20.5M, 38.5M->51.3M)", 0x560704, "280f5277553f280c6e2027d103000c002321782b7130032c04015277553f", "280a5277553f280c5277553f0f07000000000000da070704db0707030f07"),
         (
             "Lt5/f;.a0(FI)Z (Klee-style ZoomManager.apply smoother trampoline)",
@@ -118,7 +136,7 @@ DEX_PATCHES = {
         ("LG6/d;->j (clamp maxZoom to real HAL 10x Photo / 6x Video)", 0x1A7874, "5411ad00", "12011101"),
         ("LR7/d;->a fallback -> Peridot", 0x1AF924, "1200711017ce00000c00", "1c00bc28110000000000"),
         (
-            "Peridot;->i1() (5 zoom buttons [0.6x, 1x, 2x, 3x, 5x])",
+            "Peridot;->i1() (5 zoom buttons [0.6x, 1x, 3x, 5x, 10x])",
             0x462398,
             "2205fc037010bd0c050014009a99193f7110f4cd00000c001501803f7110f4cd01000c01150200407110f4cd02000c0224302b2a10020c031304a3006e30c50c450324302b2a10020c031304a2006e30c50c450324302b2a10020c001301ad006e30c50c15001105",
             I1_NEW,
@@ -134,12 +152,22 @@ DEX_PATCHES = {
         ("Common;->w5 (isSupportSAT = true)", 0x469998, "2000a5280f00", "12100f000000"),
         ("Common;->x7 (isSupportVideoSAT = true)", 0x46A164, "2000a5280f00", "12100f000000"),
         ("Common;->l0 (VideoSAT maxZoom 12.0f -> 10.0f)", 0x46A1F4, "150040410f00", "150020410f00"),
-        ("Common;->M0()[F (smooth ~335ms spline timing)", 0x46A2C8, M0_EXP_HEX, M0_NEW_HEX),
+        ("Common;->M0()[F (smooth ~500ms ease-out spline timing)", 0x46A2C8, M0_EXP_HEX, M0_NEW_HEX),
     ],
     "classes5.dex": [
         ("LZa/g;->i (graceful fallback, no IllegalStateException)", 0x498BBA, "38005400", "00000000"),
     ],
 }
+
+
+def load_zoom_smoother_dex() -> bytes:
+    hdr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zoom_smoother_dex.h")
+    with open(hdr_path, "r", encoding="utf-8") as f:
+        text = re.sub(r"/\*.*?\*/", "", f.read(), flags=re.S)
+    m = re.search(r"ZOOM_SMOOTHER_DEX\[\d*\]\s*=\s*\{(.*?)\};", text, re.S)
+    if not m:
+        raise RuntimeError(f"Could not parse ZOOM_SMOOTHER_DEX from {hdr_path}")
+    return bytes(int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]{2}", m.group(1)))
 
 
 def apply_dex(buf: bytearray, patches, label: str) -> int:
@@ -156,48 +184,101 @@ def apply_dex(buf: bytearray, patches, label: str) -> int:
     return zlib.crc32(buf) & 0xFFFFFFFF
 
 
+def append_stored_dex(apk_buf: bytearray, dex_name: str, dex_data: bytes) -> bytes:
+    """Append a 4-byte aligned STORED classesN.dex matching garnet_patcher.c layout."""
+    eocd = apk_buf.rfind(b"PK\x05\x06", max(0, len(apk_buf) - 65557))
+    if eocd < 0:
+        raise RuntimeError("Invalid APK: EOCD not found")
+    cd_sz, cd_off = struct.unpack_from("<II", apk_buf, eocd + 12)
+    name_b = dex_name.encode("ascii")
+    nlen = len(name_b)
+    dex_sz = len(dex_data)
+    dex_crc = zlib.crc32(dex_data) & 0xFFFFFFFF
+
+    pad = (4 - ((cd_off + 30 + nlen) & 3)) & 3
+    new_lfh_off = cd_off + pad
+    new_cd_off = new_lfh_off + 30 + nlen + dex_sz
+    new_cd_sz = cd_sz + 46 + nlen
+
+    lfh = bytearray(30)
+    struct.pack_into("<I", lfh, 0, 0x04034B50)
+    struct.pack_into("<H", lfh, 4, 20)
+    struct.pack_into("<H", lfh, 12, 0x0021)
+    struct.pack_into("<III", lfh, 14, dex_crc, dex_sz, dex_sz)
+    struct.pack_into("<H", lfh, 26, nlen)
+
+    cd_entry = bytearray(46)
+    struct.pack_into("<I", cd_entry, 0, 0x02014B50)
+    struct.pack_into("<HH", cd_entry, 4, 20, 20)
+    struct.pack_into("<H", cd_entry, 14, 0x0021)
+    struct.pack_into("<III", cd_entry, 16, dex_crc, dex_sz, dex_sz)
+    struct.pack_into("<H", cd_entry, 28, nlen)
+    struct.pack_into("<I", cd_entry, 42, new_lfh_off)
+
+    new_eocd = bytearray(apk_buf[eocd:])
+    struct.pack_into("<H", new_eocd, 8, struct.unpack_from("<H", new_eocd, 8)[0] + 1)
+    struct.pack_into("<H", new_eocd, 10, struct.unpack_from("<H", new_eocd, 10)[0] + 1)
+    struct.pack_into("<II", new_eocd, 12, new_cd_sz, new_cd_off)
+
+    return b"".join([
+        bytes(apk_buf[:cd_off]),
+        b"\x00" * pad,
+        bytes(lfh),
+        name_b,
+        dex_data,
+        bytes(apk_buf[cd_off : cd_off + cd_sz]),
+        bytes(cd_entry),
+        name_b,
+        bytes(new_eocd),
+    ])
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Apply v1.0 DEX patches to stock com.android.camera.apk")
+    ap = argparse.ArgumentParser(description="Apply v1.6 DEX patches + ZoomManager smoother to stock com.android.camera.apk")
     ap.add_argument("--stock-apk", required=True, help="Path to stock com.android.camera.apk")
-    ap.add_argument("--out-apk", required=True, help="Output path for patched (unsigned) APK")
+    ap.add_argument("--out-apk", required=True, help="Output path for patched APK")
     args = ap.parse_args()
 
     repls = {}
+    max_dex_num = 1
     with zipfile.ZipFile(args.stock_apk, "r") as zin:
+        for name in zin.namelist():
+            m = re.fullmatch(r"classes(\d*)\.dex", name)
+            if m:
+                max_dex_num = max(max_dex_num, int(m.group(1)) if m.group(1) else 1)
         for dname, plist in DEX_PATCHES.items():
             zi = zin.getinfo(dname)
             buf = bytearray(zin.read(dname))
             ncrc = apply_dex(buf, plist, dname)
             repls[dname] = (zi, buf, ncrc)
 
-    shutil.copyfile(args.stock_apk, args.out_apk)
-    with open(args.out_apk, "r+b") as f:
-        for fn, (zi, buf, ncrc) in repls.items():
-            f.seek(zi.header_offset)
-            lh = f.read(30)
-            nlen, elen = struct.unpack_from("<HH", lh, 26)
-            f.seek(zi.header_offset + 14)
-            f.write(struct.pack("<I", ncrc))
-            f.seek(zi.header_offset + 30 + nlen + elen)
-            f.write(buf)
-        f.seek(0, 2)
-        fsize = f.tell()
-        f.seek(max(0, fsize - 65557))
-        tail = f.read()
-        eocd = tail.rfind(b"PK\x05\x06")
-        cd_sz, cd_off = struct.unpack_from("<II", tail, eocd + 12)
-        f.seek(cd_off)
-        cd = bytearray(f.read(cd_sz))
-        pos = 0
-        while pos < len(cd):
-            nlen, elen, clen = struct.unpack_from("<HHH", cd, pos + 28)
-            name = cd[pos + 46 : pos + 46 + nlen].decode("utf-8")
-            if name in repls:
-                struct.pack_into("<I", cd, pos + 16, repls[name][2])
-            pos += 46 + nlen + elen + clen
-        f.seek(cd_off)
-        f.write(cd)
-    print(f"[OK] Wrote patched APK: {args.out_apk} (re-sign & 4KB-zipalign before flashing)")
+    with open(args.stock_apk, "rb") as f:
+        apk_buf = bytearray(f.read())
+
+    for _, (zi, buf, ncrc) in repls.items():
+        nlen, elen = struct.unpack_from("<HH", apk_buf, zi.header_offset + 26)
+        struct.pack_into("<I", apk_buf, zi.header_offset + 14, ncrc)
+        doff = zi.header_offset + 30 + nlen + elen
+        apk_buf[doff : doff + len(buf)] = buf
+
+    eocd = apk_buf.rfind(b"PK\x05\x06", max(0, len(apk_buf) - 65557))
+    cd_sz, cd_off = struct.unpack_from("<II", apk_buf, eocd + 12)
+    pos = cd_off
+    cd_end = cd_off + cd_sz
+    while pos < cd_end:
+        nlen, elen, clen = struct.unpack_from("<HHH", apk_buf, pos + 28)
+        name = apk_buf[pos + 46 : pos + 46 + nlen].decode("utf-8")
+        if name in repls:
+            struct.pack_into("<I", apk_buf, pos + 16, repls[name][2])
+        pos += 46 + nlen + elen + clen
+
+    smoother_dex = load_zoom_smoother_dex()
+    next_dex = f"classes{max_dex_num + 1}.dex"
+    out_bytes = append_stored_dex(apk_buf, next_dex, smoother_dex)
+    with open(args.out_apk, "wb") as f:
+        f.write(out_bytes)
+    print(f"  [APK] INJECTED {next_dex} ({len(smoother_dex)} bytes, ZoomManager smoother)")
+    print(f"[OK] Wrote patched APK: {args.out_apk} SHA256={hashlib.sha256(out_bytes).hexdigest()}")
 
 
 if __name__ == "__main__":
