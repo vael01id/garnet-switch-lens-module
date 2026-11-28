@@ -14,7 +14,7 @@ import zipfile
 import zlib
 
 # Peridot->i1() replacement bytecode (52 code units = 104 bytes):
-# Photo (163) & Video (162) quick zoom buttons: [0.6x, 1.0x, 2.0x, 3.0x, 5.0x]
+# Photo (163) & Video (162) quick zoom buttons: [0.6x, 1.0x, 3.0x, 5.0x, 10.0x]
 I1_NEW = (
     "2205fc03"          # new-instance v5, SparseArray
     "7010bd0c0500"      # invoke-direct {v5}, SparseArray.<init>()V
@@ -24,13 +24,13 @@ I1_NEW = (
     "1501803f"          # const/high16 v1, 1.0f
     "7110f4cd0100"      # Float.valueOf(v1)
     "0c01"              # move-result-object v1
-    "15020040"          # const/high16 v2, 2.0f
+    "15024040"          # const/high16 v2, 3.0f
     "7110f4cd0200"      # Float.valueOf(v2)
     "0c02"              # move-result-object v2
-    "15034040"          # const/high16 v3, 3.0f
+    "1503a040"          # const/high16 v3, 5.0f
     "7110f4cd0300"      # Float.valueOf(v3)
     "0c03"              # move-result-object v3
-    "1504a040"          # const/high16 v4, 5.0f
+    "15042041"          # const/high16 v4, 10.0f
     "7110f4cd0400"      # Float.valueOf(v4)
     "0c04"              # move-result-object v4
     "24542b2a1032"      # filled-new-array {v0,v1,v2,v3,v4}, [Float
@@ -75,9 +75,9 @@ LZ1L_NEW = (
     "00000000"          # nop; nop
 )
 
-# Common->M0()[F: smooth ~335-355ms ease-out spline timing on L0=[0.5,1,2,5,10,15,50,125]
+# Common->M0()[F: smooth ~500ms ease-out spline timing on L0=[0.5,1,2,5,10,15,50,125]
 M0_EXP_HEX = struct.pack("<8f", 0.0, 126.0, 253.0, 420.0, 547.0, 621.0, 840.0, 1000.0).hex()
-M0_NEW_HEX = struct.pack("<8f", 0.0, 360.0, 660.0, 990.0, 1240.0, 1390.0, 1750.0, 2020.0).hex()
+M0_NEW_HEX = struct.pack("<8f", 0.0, 600.0, 1100.0, 1650.0, 2065.0, 2315.0, 2915.0, 3365.0).hex()
 
 DEX_PATCHES = {
     "classes.dex": [
@@ -92,8 +92,8 @@ DEX_PATCHES = {
         ("FragmentDualCameraAdjust;->bi (PathInterpolator 0,0.5625,0,1 extreme ease-out)", 0x7C494A, "54a43f806e107316040054a43f802205cc0b7010022905006e207b16540054a43f80", "6e10731604002205ce0b12061507103f1508803f7058072965676e207b1654000000"),
         ("FragmentDualCameraAdjust;->notifyAfterFrameAvailable (enable spline bi for SAT)", 0x7C6E0E, "62005b0354005d036e10a5f200000a003800110059685f80", "123000000000000000000000000000000000000059605f80"),
         ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y LinearOutSlowInInterpolator)", 0x7C7E46, "220ecc0b701002290e00", "220ecc167010177a0e00"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 300ms)", 0x7C7EDC, "160e6400", "160e2c01"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 300ms)", 0x7C7EF8, "160e9600", "160e2c01"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 500ms)", 0x7C7EDC, "160e6400", "160ef401"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 500ms)", 0x7C7EF8, "160e9600", "160ef401"),
     ],
     "classes2.dex": [
         ("ZoomRatioToggleView;->b (neutralize AnimatorSet.setDuration 400L -> 0L)", 0x5A7E2E, "16009001", "16000000"),
@@ -106,7 +106,7 @@ DEX_PATCHES = {
         ("Lw5/E;->u0 (apply sharpness=0 in Video+Photo; keep Pro manual)", 0x86AC8E, "52228ede12f032020900", "52228ede3b0203001202"),
         ("Lw5/E;->H0 (bypass B0 check so applyUltraWideLDC sends level=1)", 0x868CAE, "38020b00", "00000000"),
         ("BaseModule;->updateUltraWideLDC (bypass B0 check for SAT UW LDC)", 0x514994, "38002e00", "00000000"),
-        ("video/I;->a (HEVC bitrate 2x boost: 15.4M->30.8M, 38.5M->77M)", 0x560704, "280f5277553f280c6e2027d103000c002321782b7130032c04015277553f", "280a5277553f280c5277553f0f07000000000000da0707020f0700000000"),
+        ("video/I;->a (HEVC bitrate 1.33x cooler boost: 15.4M->20.5M, 38.5M->51.3M)", 0x560704, "280f5277553f280c6e2027d103000c002321782b7130032c04015277553f", "280a5277553f280c5277553f0f07000000000000da070704db0707030f07"),
         (
             "Lt5/f;.a0(FI)Z (Klee-style ZoomManager.apply smoother trampoline)",
             0x84FA46,
