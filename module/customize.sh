@@ -23,7 +23,7 @@ mkdir -p "$MODPATH/apk/empty_oat"
 
 LOG="$MODPATH/patch.log"
 : > "$LOG"
-echo "=== Garnet Camera Fix v1.5 install ($(date 2>/dev/null || true)) ===" >> "$LOG"
+echo "=== Garnet Camera Fix v1.6 install ($(date 2>/dev/null || true)) ===" >> "$LOG"
 echo "ROM: $(getprop ro.build.fingerprint)" >> "$LOG"
 
 file_stamp() {

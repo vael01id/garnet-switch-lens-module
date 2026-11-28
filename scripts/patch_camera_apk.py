@@ -77,7 +77,7 @@ LZ1L_NEW = (
 
 # Common->M0()[F: smooth ~335-355ms ease-out spline timing on L0=[0.5,1,2,5,10,15,50,125]
 M0_EXP_HEX = struct.pack("<8f", 0.0, 126.0, 253.0, 420.0, 547.0, 621.0, 840.0, 1000.0).hex()
-M0_NEW_HEX = struct.pack("<8f", 0.0, 570.0, 1025.0, 1500.0, 1860.0, 2080.0, 2610.0, 3015.0).hex()
+M0_NEW_HEX = struct.pack("<8f", 0.0, 360.0, 660.0, 990.0, 1240.0, 1390.0, 1750.0, 2020.0).hex()
 
 DEX_PATCHES = {
     "classes.dex": [
@@ -92,10 +92,11 @@ DEX_PATCHES = {
         ("FragmentDualCameraAdjust;->bi (PathInterpolator 0,0.5625,0,1 extreme ease-out)", 0x7C494A, "54a43f806e107316040054a43f802205cc0b7010022905006e207b16540054a43f80", "6e10731604002205ce0b12061507103f1508803f7058072965676e207b1654000000"),
         ("FragmentDualCameraAdjust;->notifyAfterFrameAvailable (enable spline bi for SAT)", 0x7C6E0E, "62005b0354005d036e10a5f200000a003800110059685f80", "123000000000000000000000000000000000000059605f80"),
         ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y LinearOutSlowInInterpolator)", 0x7C7E46, "220ecc0b701002290e00", "220ecc167010177a0e00"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 450ms)", 0x7C7EDC, "160e6400", "160ec201"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 450ms)", 0x7C7EF8, "160e9600", "160ec201"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 300ms)", 0x7C7EDC, "160e6400", "160e2c01"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 300ms)", 0x7C7EF8, "160e9600", "160e2c01"),
     ],
     "classes2.dex": [
+        ("ZoomRatioToggleView;->b (neutralize AnimatorSet.setDuration 400L -> 0L)", 0x5A7E2E, "16009001", "16000000"),
         ("LD3/e;->C()I (Native Photo SAT roleId 60 -> 62 = cameraId 4)", 0x4B797C, "13033c00", "13033e00"),
         ("LD3/e;->K()Z (Native Photo SAT hasSATCamera roleId 60 -> 62)", 0x4B7CAA, "13023c00", "13023e00"),
         ("StopPointScaleZoomSliderDrawAdapter;->initValue (0.6f lower bound)", 0x5C9F68, "38030500", "28050000"),
@@ -106,6 +107,12 @@ DEX_PATCHES = {
         ("Lw5/E;->H0 (bypass B0 check so applyUltraWideLDC sends level=1)", 0x868CAE, "38020b00", "00000000"),
         ("BaseModule;->updateUltraWideLDC (bypass B0 check for SAT UW LDC)", 0x514994, "38002e00", "00000000"),
         ("video/I;->a (HEVC bitrate 2x boost: 15.4M->30.8M, 38.5M->77M)", 0x560704, "280f5277553f280c6e2027d103000c002321782b7130032c04015277553f", "280a5277553f280c5277553f0f07000000000000da0707020f0700000000"),
+        (
+            "Lt5/f;.a0(FI)Z (Klee-style ZoomManager.apply smoother trampoline)",
+            0x84FA46,
+            "220afe231a0b34fb702062d1ba00020b13006e2065d1ba001a0ccd0a6e206ad1ca00540c59dc6e1038220c000c0c6e206ad1ca001a0cd10a6e206ad1ca006e2066d11a006e1077d10a000c0a239c782b1a0d067f7130032cad0c",
+            "1a0d067f711052d00d000c0a1a0bca8a1c0eef232430732bee0e0c0c6e3067d0ba0c0c0a7701a3d013000c0b7110c2d001000c0c2430782bb00c0c0b120c6e30e3d1ca0b0c0a380a03000f04020b130000000000000000000000",
+        ),
     ],
     "classes3.dex": [
         ("LG6/d;->j (clamp maxZoom to real HAL 10x Photo / 6x Video)", 0x1A7874, "5411ad00", "12011101"),
