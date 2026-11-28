@@ -448,24 +448,19 @@ static const PatRule MCREPROCRT_RULES[] = {
     {32, 28, 13, 60, 1}, /* 0x33439 */
 };
 
-static const PatRule CHI_RULES[] = {
-    {61, 28, 12, 89, 3}, /* 0x28bb0 */
-    {92, 28, 12, 120, 1}, /* 0xb6bb4 */
-    {121, 40, 12, 161, 16}, /* 0x1a3304 */
-    {177, 28, 14, 205, 1}, /* 0x1a3316 */
-    {206, 28, 13, 234, 3}, /* 0x298625 */
-    {237, 28, 14, 265, 1}, /* 0x29864e */
-    {266, 28, 13, 294, 1}, /* 0x298651 */
-    {295, 28, 12, 323, 4}, /* 0x298678 */
-    {327, 28, 13, 355, 2}, /* 0x298681 */
-    {357, 28, 12, 385, 4}, /* 0x298688 */
-    {389, 28, 12, 417, 4}, /* 0x29869c */
-    {421, 28, 13, 449, 2}, /* 0x2ff6c5 */
-    {451, 28, 12, 479, 1}, /* 0x3d5650 */
+static const PatRule CHI_FIXED_RULES[] = {
+    {92, 28, 12, 120, 1},   /* logical cam count / roleId table 0x3f -> 0x3e */
+    {121, 40, 12, 161, 16}, /* SAT transition guard patch A */
+    {177, 28, 14, 205, 1},  /* SAT transition guard patch B */
+    {421, 28, 13, 449, 2},  /* roleId 0x3f -> 0x3e compare */
 };
-
-static const uint8_t CHI_HOOK1_CTX[] = {0xc3,0xe0,0x02,0x94,0xa0,0x16,0x00,0xf9,0xe8,0x03,0x14,0xaa,0x16,0x44,0x00,0xb8,0xa0,0x02,0x03,0xa9,0xe0,0x03,0x15,0xaa,0xe1,0x03,0x15,0xaa};
-static const uint8_t CHI_HOOK2_CTX[] = {0xbf,0x7f,0x37,0xa9,0xbf,0x03,0x18,0xf8,0x0f,0xb0,0x0c,0x94,0xf6,0x03,0x00,0x2a,0x20,0x01,0x00,0x34,0x53,0xd3,0x41,0xa9,0x9f,0x02,0x13,0xeb};
+/* Universal 0.65f -> 0.6001f zoom threshold (handles reordered [1.8,2.68] / [0.65,0.9999] pairs) */
+static const uint8_t CHI_ZOOM65_CTX[20] = {
+    0x00,0x00,0x00,0x00, 0x00,0x00,0x00,0x00,
+    0x66,0x66,0x26,0x3f, 0x72,0xf9,0x7f,0x3f,
+    0x00,0x00,0x00,0x00
+};
+static const uint8_t CHI_ZOOM65_REP[3] = {0x0c, 0x93, 0x19};
 static const uint8_t GEN_HOOK_CTX[]  = {0xa8,0x83,0x1f,0xf8,0x48,0x0c,0x40,0xf9,0x09,0x48,0x41,0xf9,0x16,0x21,0x5e,0xf9,0x28,0x01,0x40,0xb9,0x96,0x0b,0x00,0xb4,0x1f,0xb9,0x00,0x71};
 
 static const PatRule DEX_PAT_RULES[] = {
@@ -645,6 +640,285 @@ static uint64_t elf_vaddr_to_file(const uint8_t *buf, size_t sz, uint64_t vaddr)
 static uint32_t arm64_b(uint64_t pc, uint64_t target, int is_bl) {
     int64_t diff = ((int64_t)target - (int64_t)pc) >> 2;
     return (is_bl ? 0x94000000u : 0x14000000u) | ((uint32_t)diff & 0x03FFFFFFu);
+}
+
+static int arm64_dec_adrp(uint64_t pc_va, uint32_t insn, uint64_t *out_page, uint32_t *out_rd) {
+    if ((insn & 0x9F000000u) != 0x90000000u) return 0;
+    int64_t imm = (int64_t)((((insn >> 5) & 0x7FFFFu) << 2) | ((insn >> 29) & 3u));
+    if (imm & 0x100000) imm -= 0x200000;
+    *out_page = (pc_va & ~0xFFFULL) + (uint64_t)(imm << 12);
+    *out_rd = insn & 31u;
+    return 1;
+}
+
+static int arm64_enc_adrp(uint64_t pc_va, uint64_t target_va, uint32_t rd, uint32_t *out_insn) {
+    int64_t delta = ((int64_t)(target_va & ~0xFFFULL) - (int64_t)(pc_va & ~0xFFFULL)) >> 12;
+    if (delta < -0x100000 || delta > 0xFFFFF) return 0;
+    uint32_t u = (uint32_t)delta & 0x1FFFFFu;
+    *out_insn = 0x90000000u | ((u & 3u) << 29) | (((u >> 2) & 0x7FFFFu) << 5) | (rd & 31u);
+    return 1;
+}
+
+static uint32_t arm64_enc_add12(uint32_t rd, uint32_t rn, uint32_t imm12) {
+    return 0x91000000u | ((imm12 & 0xFFFu) << 10) | ((rn & 31u) << 5) | (rd & 31u);
+}
+
+static int elf_cstr_eq(const uint8_t *buf, size_t sz, uint64_t vaddr, const char *s) {
+    uint64_t foff = elf_vaddr_to_file(buf, sz, vaddr);
+    if (foff == (uint64_t)-1) return 0;
+    size_t slen = xstrlen(s);
+    if (foff + slen + 1 > sz) return 0;
+    return memcmp(buf + foff, s, slen + 1) == 0;
+}
+
+static int elf_is_bss_vaddr(const uint8_t *buf, size_t sz, uint64_t vaddr) {
+    uint64_t phoff = rd64(buf + 32);
+    uint16_t phent = rd16(buf + 54);
+    uint16_t phnum = rd16(buf + 56);
+    for (uint16_t i = 0; i < phnum; i++) {
+        uint64_t po = phoff + (uint64_t)i * phent;
+        if (rd32(buf + po) != 1) continue;
+        uint64_t p_vaddr  = rd64(buf + po + 16);
+        uint64_t p_filesz = rd64(buf + po + 32);
+        uint64_t p_memsz  = rd64(buf + po + 40);
+        if (p_memsz > p_filesz && vaddr >= p_vaddr + p_filesz && vaddr < p_vaddr + p_memsz) return 1;
+    }
+    return 0;
+}
+
+static int is_cam_entry(const uint8_t *buf, size_t sz, uint64_t foff, const char *name, uint32_t c1, uint32_t c2, uint32_t c3) {
+    if (foff + 32 > sz) return 0;
+    uint64_t ptr = rd64(buf + foff);
+    if (rd32(buf + foff + 8) != c1 || rd32(buf + foff + 12) != c2 || rd32(buf + foff + 16) != c3) return 0;
+    return elf_cstr_eq(buf, sz, ptr, name);
+}
+
+static int find_masked_unique_rx(const uint8_t *buf, size_t sz, const uint32_t *words, const uint32_t *masks, size_t nwords, uint64_t *out_foff) {
+    uint64_t phoff = rd64(buf + 32);
+    uint16_t phent = rd16(buf + 54);
+    uint16_t phnum = rd16(buf + 56);
+    uint64_t hit = 0;
+    int count = 0;
+    size_t nbytes = nwords * 4;
+    for (uint16_t i = 0; i < phnum; i++) {
+        uint64_t po = phoff + (uint64_t)i * phent;
+        if (rd32(buf + po) != 1 || !(rd32(buf + po + 4) & 1)) continue;
+        uint64_t p_off = rd64(buf + po + 8);
+        uint64_t p_fsz = rd64(buf + po + 32);
+        if (p_fsz < nbytes || p_off + p_fsz > sz) continue;
+        uint64_t end = p_off + p_fsz - nbytes;
+        uint32_t w0 = words[0], m0 = masks[0];
+        for (uint64_t f = p_off; f <= end; f += 4) {
+            if ((rd32(buf + f) & m0) != w0) continue;
+            int ok = 1;
+            for (size_t k = 1; k < nwords; k++) {
+                if ((rd32(buf + f + k * 4) & masks[k]) != words[k]) { ok = 0; break; }
+            }
+            if (ok) {
+                hit = f;
+                count++;
+                if (count > 1) return 2;
+            }
+        }
+    }
+    if (count == 1) *out_foff = hit;
+    return count;
+}
+
+typedef struct {
+    uint64_t pc_strd;
+    uint32_t orig_strd;
+    uint64_t pc_tbl_adrp;
+    uint64_t pc_tbl_add;
+    uint32_t tbl_reg;
+    uint64_t t_vt_va;
+    uint64_t pc_mov8;
+    uint64_t pc_b0;
+    uint64_t pc_b1;
+    uint64_t pc_b2;
+    uint64_t pc_str8;
+} ChiMcBlock;
+
+static int find_garnet_mc_block(const uint8_t *buf, size_t sz, ChiMcBlock *out) {
+    uint64_t phoff = rd64(buf + 32);
+    uint16_t phent = rd16(buf + 54);
+    uint16_t phnum = rd16(buf + 56);
+    int matches = 0;
+    ChiMcBlock found;
+    memset(&found, 0, sizeof(found));
+
+    for (uint16_t i = 0; i < phnum; i++) {
+        uint64_t po = phoff + (uint64_t)i * phent;
+        if (rd32(buf + po) != 1 || !(rd32(buf + po + 4) & 1)) continue;
+        uint64_t p_off = rd64(buf + po + 8);
+        uint64_t p_va  = rd64(buf + po + 16);
+        uint64_t p_fsz = rd64(buf + po + 32);
+        if (p_fsz < 256 || p_off + p_fsz > sz) continue;
+        uint64_t end = p_off + p_fsz - 256;
+
+        for (uint64_t f = p_off; f <= end; f += 4) {
+            uint64_t va = p_va + (f - p_off);
+            uint64_t page = 0; uint32_t rd = 0;
+            if (!arm64_dec_adrp(va, rd32(buf + f), &page, &rd)) continue;
+            /* Check next 1..2 insns for add rd, rd, #imm12 -> "MultiCamera" */
+            int is_mc = 0;
+            for (uint64_t k = 1; k <= 2; k++) {
+                uint32_t wk = rd32(buf + f + k * 4);
+                if ((wk & 0xFFC003FFu) == (0x91000000u | (rd << 5) | rd)) {
+                    uint64_t target = page + ((wk >> 10) & 0xFFFu);
+                    if (elf_cstr_eq(buf, sz, target, "MultiCamera")) { is_mc = 1; break; }
+                }
+            }
+            if (!is_mc) continue;
+
+            /* 1. str dN, [x0, #8] within +8..+24 */
+            uint64_t pc_strd = 0; uint32_t orig_strd = 0;
+            for (uint64_t d = 8; d <= 24; d += 4) {
+                uint32_t w = rd32(buf + f + d);
+                if ((w & 0xFFFFFFE0u) == 0xFD000400u) { pc_strd = f + d; orig_strd = w; break; }
+            }
+            if (!pc_strd) continue;
+
+            /* 2. adrp+add rTbl -> t_mc ([UW(2,1,2), Wide(0,1,0)]) with t_vt=t_mc+0x40 ([Wide(0,1,0), UW(2,1,2), Front(1,1,1)]) */
+            uint64_t pc_ta = 0, pc_td = 0, t_vt_va = 0; uint32_t rtbl = 0;
+            for (uint64_t d = 24; d <= 80; d += 4) {
+                uint64_t tpage = 0; uint32_t trd = 0;
+                if (!arm64_dec_adrp(va + d, rd32(buf + f + d), &tpage, &trd)) continue;
+                for (uint64_t k = 1; k <= 3; k++) {
+                    uint32_t wk = rd32(buf + f + d + k * 4);
+                    if ((wk & 0xFFC003FFu) == (0x91000000u | (trd << 5) | trd)) {
+                        uint64_t t_mc_va = tpage + ((wk >> 10) & 0xFFFu);
+                        uint64_t t_mc_fo = elf_vaddr_to_file(buf, sz, t_mc_va);
+                        if (t_mc_fo != (uint64_t)-1 &&
+                            is_cam_entry(buf, sz, t_mc_fo + 0x00, "UltrawidePhysicalCam", 2, 1, 2) &&
+                            is_cam_entry(buf, sz, t_mc_fo + 0x20, "WidePhysicalCam", 0, 1, 0) &&
+                            is_cam_entry(buf, sz, t_mc_fo + 0x40, "WidePhysicalCam", 0, 1, 0) &&
+                            is_cam_entry(buf, sz, t_mc_fo + 0x60, "UltrawidePhysicalCam", 2, 1, 2) &&
+                            is_cam_entry(buf, sz, t_mc_fo + 0x80, "FrontPhysicalCam", 1, 1, 1)) {
+                            pc_ta = f + d; pc_td = f + d + k * 4; rtbl = trd; t_vt_va = t_mc_va + 0x40;
+                        }
+                        break;
+                    }
+                }
+                if (pc_ta) break;
+            }
+            if (!pc_ta) continue;
+
+            /* 3. mov w1, #8 within +4..+16 after pc_tbl_add */
+            uint64_t pc_mov8 = 0;
+            for (uint64_t d = 4; d <= 16; d += 4) {
+                if (rd32(buf + pc_td + d) == 0x52800101u) { pc_mov8 = pc_td + d; break; }
+            }
+            if (!pc_mov8) continue;
+
+            /* 4. adrp x8, <bss>; add x8, x8, #imm1; add x8, x8, #imm2; ... mov w1,#0x40 ... str x8, [x0], #8 */
+            uint64_t pc_b0 = 0, pc_b1 = 0, pc_b2 = 0, pc_str8 = 0;
+            int has_mov64 = 0;
+            for (uint64_t d = 16; d <= 80; d += 4) {
+                uint64_t q = pc_mov8 + d;
+                uint64_t bpage = 0; uint32_t brd = 0;
+                if (!arm64_dec_adrp(p_va + (q - p_off), rd32(buf + q), &bpage, &brd) || brd != 8) continue;
+                uint64_t b1 = 0, b2 = 0;
+                for (uint64_t k = 1; k <= 3; k++) {
+                    if ((rd32(buf + q + k * 4) & 0xFFC003FFu) == 0x91000108u) { b1 = q + k * 4; break; }
+                }
+                if (!b1) continue;
+                for (uint64_t k = 1; k <= 3; k++) {
+                    if ((rd32(buf + b1 + k * 4) & 0xFFC003FFu) == 0x91000108u) { b2 = b1 + k * 4; break; }
+                }
+                if (!b2) continue;
+                /* Confirm str x8, [x0], #8 within +4..+32 after b2, and mov w1, #0x40 between q and str8 */
+                for (uint64_t s = 4; s <= 32; s += 4) {
+                    if (rd32(buf + b2 + s) == 0xF8008408u) { pc_str8 = b2 + s; break; }
+                }
+                if (!pc_str8) continue;
+                for (uint64_t m = q; m < pc_str8; m += 4) {
+                    if (rd32(buf + m) == 0x52800801u) { has_mov64 = 1; break; }
+                }
+                if (!has_mov64) { pc_str8 = 0; continue; }
+                /* Confirm VTCamera string loaded right after pc_str8 (+4..+24) */
+                int has_vt = 0;
+                for (uint64_t v = 4; v <= 20; v += 4) {
+                    uint64_t vpage = 0; uint32_t vrd = 0;
+                    if (!arm64_dec_adrp(p_va + (pc_str8 + v - p_off), rd32(buf + pc_str8 + v), &vpage, &vrd)) continue;
+                    for (uint64_t k = 1; k <= 3; k++) {
+                        uint32_t wk = rd32(buf + pc_str8 + v + k * 4);
+                        if ((wk & 0xFFC003FFu) == (0x91000000u | (vrd << 5) | vrd)) {
+                            if (elf_cstr_eq(buf, sz, vpage + ((wk >> 10) & 0xFFFu), "VTCamera")) { has_vt = 1; break; }
+                        }
+                    }
+                    if (has_vt) break;
+                }
+                if (!has_vt) { pc_str8 = 0; continue; }
+                pc_b0 = q; pc_b1 = b1; pc_b2 = b2;
+                break;
+            }
+            if (!pc_b0) continue;
+
+            found.pc_strd = pc_strd;
+            found.orig_strd = orig_strd;
+            found.pc_tbl_adrp = pc_ta;
+            found.pc_tbl_add = pc_td;
+            found.tbl_reg = rtbl;
+            found.t_vt_va = t_vt_va;
+            found.pc_mov8 = pc_mov8;
+            found.pc_b0 = pc_b0;
+            found.pc_b1 = pc_b1;
+            found.pc_b2 = pc_b2;
+            found.pc_str8 = pc_str8;
+            matches++;
+            if (matches > 1) return 2;
+        }
+    }
+    if (matches == 1) *out = found;
+    return matches;
+}
+
+static int find_pair_arr(const uint8_t *buf, size_t sz, uint64_t *out_va) {
+    uint64_t phoff = rd64(buf + 32);
+    uint16_t phent = rd16(buf + 54);
+    uint16_t phnum = rd16(buf + 56);
+    uint64_t strict_va = 0, base_va = 0;
+    int strict_cnt = 0, base_cnt = 0;
+
+    for (uint16_t i = 0; i < phnum; i++) {
+        uint64_t po = phoff + (uint64_t)i * phent;
+        if (rd32(buf + po) != 1 || rd32(buf + po + 4) != 6) continue; /* RW PT_LOAD (.data.rel.ro) */
+        uint64_t p_off = rd64(buf + po + 8);
+        uint64_t p_va  = rd64(buf + po + 16);
+        uint64_t p_fsz = rd64(buf + po + 32);
+        if (p_fsz < 0x120 || p_off + p_fsz > sz) continue;
+        uint64_t start = (p_off + 0x80 + 7) & ~7ULL;
+        uint64_t end = p_off + p_fsz - 0x88;
+
+        for (uint64_t a = start; a <= end; a += 8) {
+            uint64_t q0 = rd64(buf + a);
+            if (!elf_is_bss_vaddr(buf, sz, q0)) continue;
+            int seq_ok = 1;
+            for (int k = 1; k < 5; k++) {
+                uint64_t qk = rd64(buf + a + (uint64_t)k * 8);
+                if (qk != q0 + (uint64_t)k * 0x38ULL || !elf_is_bss_vaddr(buf, sz, qk)) { seq_ok = 0; break; }
+            }
+            if (!seq_ok) continue;
+            if (!is_cam_entry(buf, sz, a - 0x40, "UltrawidePhysicalCam", 2, 1, 2)) continue;
+            if (!is_cam_entry(buf, sz, a - 0x20, "WidePhysicalCam", 0, 1, 0)) continue;
+            if (!is_cam_entry(buf, sz, a + 0x28, "WidePhysicalCam", 0, 1, 0)) continue;
+            if (!is_cam_entry(buf, sz, a + 0x48, "UltrawidePhysicalCam", 2, 1, 2)) continue;
+            if (!is_cam_entry(buf, sz, a + 0x68, "FrontPhysicalCam", 1, 1, 1)) continue;
+
+            uint64_t cand_va = p_va + (a - p_off);
+            base_va = cand_va;
+            base_cnt++;
+            if (is_cam_entry(buf, sz, a - 0x80, "RearTOFSensor", 7, 1, 5) &&
+                is_cam_entry(buf, sz, a - 0x60, "UltrawidePhysicalCam", 6, 1, 4)) {
+                strict_va = cand_va;
+                strict_cnt++;
+            }
+        }
+    }
+    if (strict_cnt == 1) { *out_va = strict_va; return 1; }
+    if (strict_cnt == 0 && base_cnt == 1) { *out_va = base_va; return 1; }
+    return 0;
 }
 
 /* NUL-delimited CamX override keys -> zero pointer relocations! */
@@ -838,47 +1112,105 @@ static int cmd_patch_hal(const char *kind, const char *src, const char *dst) {
             }
         }
     } else if (xstrcmp(kind, "chi_override") == 0) {
-        /* Atomic all-or-nothing match: never emit a half-patched chi_override on incompatible vendor */
+        /* Universal atomic 15/15 chi_override patcher (HyperOS 1/2/3, OOS16, Lunaris/AOSP).
+         * Every single rule, dynamic ADRP+ADD target, transition pair, and RX cave hook must
+         * resolve uniquely before a single byte is modified. */
         if (elf_has_str(buf, sz, "chi_hal_override_entry")) {
-            size_t nchi = sizeof(CHI_RULES) / sizeof(CHI_RULES[0]);
-            size_t hits[32];
-            int all_ok = 1;
-            for (size_t i = 0; i < nchi; i++) {
-                if (find_unique(buf, sz, RULE_BLOB + CHI_RULES[i].ctx_off, CHI_RULES[i].ctx_len, &hits[i]) != 1) {
+            size_t z65_hit = 0;
+            size_t fixed_hits[4];
+            int all_ok = (find_unique(buf, sz, CHI_ZOOM65_CTX, sizeof(CHI_ZOOM65_CTX), &z65_hit) == 1);
+            for (size_t i = 0; all_ok && i < 4; i++) {
+                if (find_unique(buf, sz, RULE_BLOB + CHI_FIXED_RULES[i].ctx_off, CHI_FIXED_RULES[i].ctx_len, &fixed_hits[i]) != 1)
                     all_ok = 0;
-                    break;
-                }
             }
-            size_t h1 = 0, h2 = 0;
-            int ok1 = (find_unique(buf, sz, CHI_HOOK1_CTX, sizeof(CHI_HOOK1_CTX), &h1) == 1) &&
-                      (h1 & 3) == 0 && is_in_rx_seg(buf, sz, h1, sizeof(CHI_HOOK1_CTX));
-            int ok2 = (find_unique(buf, sz, CHI_HOOK2_CTX, sizeof(CHI_HOOK2_CTX), &h2) == 1) &&
-                      (h2 & 3) == 0 && is_in_rx_seg(buf, sz, h2, sizeof(CHI_HOOK2_CTX));
-            if (all_ok && ok1 && ok2) {
+
+            /* HOOK1 + RULE12: CameraIdXiaomi logical camera list (BL immediates masked) */
+            static const uint32_t h1_words[13] = {
+                0x52800801u, 0xf9000a9fu, 0x94000000u, 0x528007f6u,
+                0xaa0003f5u, 0x52800081u, 0xb9002016u, 0x52800020u,
+                0x94000000u, 0xf90016a0u, 0xaa1403e8u, 0xb8004416u,
+                0xa90302a0u
+            };
+            static const uint32_t h1_masks[13] = {
+                0xffffffffu, 0xffffffffu, 0xfc000000u, 0xffffffffu,
+                0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+                0xfc000000u, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+                0xffffffffu
+            };
+            /* HOOK2: FinalizeFeatureInstances SWRemosaic guard (verifies [x29, #-0xe0], BL masked) */
+            static const uint32_t h2_words[9] = {
+                0xf85203a0u, 0xd10243a2u, 0xa9377fbfu, 0xf81803bfu,
+                0x94000000u, 0x2a0003f6u, 0x34000120u, 0xa941d353u,
+                0xeb13029fu
+            };
+            static const uint32_t h2_masks[9] = {
+                0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+                0xfc000000u, 0xffffffffu, 0xffffffffu, 0xffffffffu,
+                0xffffffffu
+            };
+
+            uint64_t h1_blk = 0, h2_blk = 0, pair_arr_va = 0;
+            ChiMcBlock mc;
+            memset(&mc, 0, sizeof(mc));
+            if (all_ok &&
+                find_masked_unique_rx(buf, sz, h1_words, h1_masks, 13, &h1_blk) == 1 &&
+                find_masked_unique_rx(buf, sz, h2_words, h2_masks, 9, &h2_blk) == 1 &&
+                find_garnet_mc_block(buf, sz, &mc) == 1 &&
+                find_pair_arr(buf, sz, &pair_arr_va) == 1) {
+                uint64_t pc_tbl_adrp_va = elf_file_to_vaddr(buf, sz, mc.pc_tbl_adrp);
+                uint64_t pc_b0_va       = elf_file_to_vaddr(buf, sz, mc.pc_b0);
+                uint32_t insn_tbl_adrp = 0, insn_b0_adrp = 0;
+                uint64_t h1_pc = h1_blk + 44;
+                uint64_t h2_pc = h2_blk + 20;
                 uint64_t cave_base = 0;
-                if (alloc_rx_cave_for(buf, sz, h1 + 12, 32, 0x40, &cave_base) == 0) {
-                    for (size_t i = 0; i < nchi; i++) {
-                        memcpy(buf + hits[i] + CHI_RULES[i].rel, RULE_BLOB + CHI_RULES[i].rep_off, CHI_RULES[i].rep_len);
+                if (pc_tbl_adrp_va != (uint64_t)-1 && pc_b0_va != (uint64_t)-1 &&
+                    arm64_enc_adrp(pc_tbl_adrp_va, mc.t_vt_va, mc.tbl_reg, &insn_tbl_adrp) &&
+                    arm64_enc_adrp(pc_b0_va, pair_arr_va, 8, &insn_b0_adrp) &&
+                    alloc_rx_cave_for(buf, sz, h1_pc, 32, 0x40, &cave_base) == 0) {
+                    uint64_t cave2 = cave_base + 0x10;
+                    uint64_t d2 = (cave2 > h2_pc) ? (cave2 - h2_pc) : (h2_pc - cave2);
+                    if (d2 < 0x07F00000ULL) {
+                        /* 1. 0.65f -> 0.6001f zoom threshold */
+                        memcpy(buf + z65_hit + 8, CHI_ZOOM65_REP, 3);
+                        edits++;
+                        /* 2..5. Fixed-pattern unique rules */
+                        for (size_t i = 0; i < 4; i++) {
+                            memcpy(buf + fixed_hits[i] + CHI_FIXED_RULES[i].rel,
+                                   RULE_BLOB + CHI_FIXED_RULES[i].rep_off, CHI_FIXED_RULES[i].rep_len);
+                            edits++;
+                        }
+                        /* 6..12. Dynamic garnet MultiCamera logical config (7 edits) */
+                        wr32(buf + mc.pc_strd,     0xBD000800u | (mc.orig_strd & 0x1Fu));
+                        wr32(buf + mc.pc_tbl_adrp, insn_tbl_adrp);
+                        wr32(buf + mc.pc_tbl_add,  arm64_enc_add12(mc.tbl_reg, mc.tbl_reg, (uint32_t)(mc.t_vt_va & 0xFFFu)));
+                        wr32(buf + mc.pc_mov8,     0x52800201u); /* mov w1, #0x10 */
+                        wr32(buf + mc.pc_b0,       insn_b0_adrp);
+                        wr32(buf + mc.pc_b1,       arm64_enc_add12(8, 8, (uint32_t)(pair_arr_va & 0xFFFu)));
+                        wr32(buf + mc.pc_b2,       0x3DC00100u); /* ldr q0, [x8] */
+                        wr32(buf + mc.pc_str8,     0x3C810400u); /* str q0, [x0], #16 */
+                        edits += 7;
+                        /* 13. CameraIdXiaomi roleId 0x3f -> 0x3e */
+                        wr32(buf + h1_blk + 12, 0x528007d6u); /* mov w22, #0x3e */
+                        edits++;
+                        /* 14. HOOK1 RX cave: write 0x3f into logical camera array */
+                        static const uint8_t c1[12] = {
+                            0xe9,0x07,0x80,0x52, 0x09,0x44,0x00,0xb8, 0xc0,0x03,0x5f,0xd6
+                        };
+                        memcpy(buf + cave_base, c1, 12);
+                        wr32(buf + h1_pc, arm64_b(h1_pc, cave_base, 1));
+                        edits++;
+                        /* 15. HOOK2 RX cave: FinalizeFeatureInstances SWRemosaic guard */
+                        static const uint8_t c2[28] = {
+                            0xc0,0x00,0x00,0x34, 0xa8,0x03,0x52,0xf8,
+                            0x08,0x49,0x41,0xf9, 0x08,0x01,0x40,0xb9,
+                            0x1f,0x89,0x00,0x71, 0xe0,0x03,0x80,0x1a,
+                            0xf6,0x03,0x00,0x2a
+                        };
+                        memcpy(buf + cave2, c2, 28);
+                        wr32(buf + cave2 + 28, arm64_b(cave2 + 28, h2_pc + 4, 0));
+                        wr32(buf + h2_pc, arm64_b(h2_pc, cave2, 0));
                         edits++;
                     }
-                    static const uint8_t c1[12] = {
-                        0xe9,0x07,0x80,0x52, 0x09,0x44,0x00,0xb8, 0xc0,0x03,0x5f,0xd6
-                    };
-                    memcpy(buf + cave_base, c1, 12);
-                    wr32(buf + h1 + 12, arm64_b(h1 + 12, cave_base, 1));
-                    edits++;
-
-                    uint64_t cave2 = cave_base + 0x10;
-                    static const uint8_t c2[28] = {
-                        0xc0,0x00,0x00,0x34, 0xa8,0x03,0x52,0xf8,
-                        0x08,0x49,0x41,0xf9, 0x08,0x01,0x40,0xb9,
-                        0x1f,0x89,0x00,0x71, 0xe0,0x03,0x80,0x1a,
-                        0xf6,0x03,0x00,0x2a
-                    };
-                    memcpy(buf + cave2, c2, 28);
-                    wr32(buf + cave2 + 28, arm64_b(cave2 + 28, h2 + 12 + 4, 0));
-                    wr32(buf + h2 + 12, arm64_b(h2 + 12, cave2, 0));
-                    edits++;
                 }
             }
         }

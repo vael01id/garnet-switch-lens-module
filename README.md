@@ -8,9 +8,10 @@ Universal, **zero-overlay anti-bootloop** Magisk / KernelSU / APatch module to f
 - **Camera App:** MIUI / Leica Camera (`com.android.camera`) — *auto-falls back to HAL-only mode if APK version differs*
 - **Root:** Magisk / KernelSU / APatch
 
-## Anti-Bootloop Architecture (`v1.3+`)
+## Anti-Bootloop & Universal Vendor Architecture (`v1.3` / `v1.4`)
 - **Zero early-boot `/vendor` or `/system` overlay:** no `$MODPATH/system/`, no `$MODPATH/vendor/`, and no static `system.prop` — impossible to cause stuck boot logo on any ROM or root manager.
 - **Post-boot bind-mounts only (`service.sh` after `sys.boot_completed=1`):** preserves each ROM's exact stock SELinux contexts (`ls -Z` → `chcon`), dynamically appends `com.android.camera` via `resetprop -n` (respecting the 91-char `PROP_VALUE_MAX`), and safely restarts camera HAL once.
+- **Universal dynamic ARM64 `chi_override` resolver (`v1.4`):** dynamically resolves shifted `BL`, `ADRP+ADD`, `MultiCamera` logical config tables, and Wide↔UW transition pointer arrays across HyperOS 1/2/3, OOS16 ports, and AOSP/Lunaris vendor HALs (atomic 15/15 all-or-nothing patching).
 - **Strict ELF64/AArch64 & pattern verification (`garnet_patcher`):** validates ELF headers, RX `PT_LOAD` segment bounds, ARM64 instruction alignment, ADRP+ADD `.rodata` targets, atomic `chi_override` matching, and APK method-anchor thresholds. Incompatible files are skipped cleanly (stock untouched) and logged to `/data/adb/modules/garnet_oos16_uw_fix/patch.log`.
 - **Auto-re-patch on ROM/APK updates:** detects changed stock vendor or APK stamps and re-patches cleanly after updates.
 
@@ -24,7 +25,7 @@ Universal, **zero-overlay anti-bootloop** Magisk / KernelSU / APatch module to f
 - 1080p 60fps on main/video zoom, auto fallback to 1080p 30fps on UltraWide, Front, and Macro
 
 ## Installation
-1. Download `garnet-camera-fix-v1.3.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest).
+1. Download `garnet-camera-fix-v1.4.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest).
 2. Flash in Magisk Manager / KernelSU / APatch.
 3. Reboot (first boot after upgrading from `v1.2` automatically re-patches clean stock vendor post-boot; inspect `/data/adb/modules/garnet_oos16_uw_fix/patch.log` for details).
 
