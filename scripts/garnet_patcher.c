@@ -836,13 +836,15 @@ static int find_garnet_mc_block(const uint8_t *buf, size_t sz, ChiMcBlock *out) 
                     if (rd32(buf + m) == 0x52800801u) { has_mov64 = 1; break; }
                 }
                 if (!has_mov64) { pc_str8 = 0; continue; }
-                /* Confirm VTCamera string loaded right after pc_str8 (+4..+24) */
+                /* Confirm VTCamera string loaded near pc_b0..pc_str8+24 (HOS4 hoists it before pc_str8) */
                 int has_vt = 0;
-                for (uint64_t v = 4; v <= 20; v += 4) {
+                uint64_t vt_end = pc_str8 + 24;
+                if (vt_end > p_off + p_fsz - 16) vt_end = p_off + p_fsz - 16;
+                for (uint64_t v = q; v <= vt_end; v += 4) {
                     uint64_t vpage = 0; uint32_t vrd = 0;
-                    if (!arm64_dec_adrp(p_va + (pc_str8 + v - p_off), rd32(buf + pc_str8 + v), &vpage, &vrd)) continue;
+                    if (!arm64_dec_adrp(p_va + (v - p_off), rd32(buf + v), &vpage, &vrd)) continue;
                     for (uint64_t k = 1; k <= 3; k++) {
-                        uint32_t wk = rd32(buf + pc_str8 + v + k * 4);
+                        uint32_t wk = rd32(buf + v + k * 4);
                         if ((wk & 0xFFC003FFu) == (0x91000000u | (vrd << 5) | vrd)) {
                             if (elf_cstr_eq(buf, sz, vpage + ((wk >> 10) & 0xFFFu), "VTCamera")) { has_vt = 1; break; }
                         }
@@ -909,7 +911,7 @@ static int find_pair_arr(const uint8_t *buf, size_t sz, uint64_t *out_va) {
             uint64_t cand_va = p_va + (a - p_off);
             base_va = cand_va;
             base_cnt++;
-            if (is_cam_entry(buf, sz, a - 0x80, "RearTOFSensor", 7, 1, 5) &&
+            if (elf_cstr_eq(buf, sz, rd64(buf + a - 0x80), "RearTOFSensor") &&
                 is_cam_entry(buf, sz, a - 0x60, "UltrawidePhysicalCam", 6, 1, 4)) {
                 strict_va = cand_va;
                 strict_cnt++;
@@ -1329,6 +1331,382 @@ static int is_classes_dex(const uint8_t *nm, uint16_t nlen) {
     return 1;
 }
 
+/* Dalvik instruction widths in 16-bit code units (zero relocations!) */
+static const uint8_t DEX_INSN_W[256] = {
+    1,1,2,3,1,2,3,1,2,3,1,1,1,1,1,1, 1,1,1,2,3,2,2,3,5,2,2,3,2,1,1,2,
+    2,1,2,2,3,3,3,1,1,2,3,3,3,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,
+    1,1,1,1,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3, 3,3,3,1,3,3,3,3,3,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1,1,1,4,4,2,2,2,2,
+};
+
+static size_t dex_insn_step(const uint8_t *code, size_t clen, size_t i) {
+    uint8_t op = code[i];
+    if (op == 0x00 && i + 4 <= clen && (code[i + 1] == 1 || code[i + 1] == 2 || code[i + 1] == 3)) {
+        uint8_t id = code[i + 1];
+        if (id == 1) return ((size_t)rd16(code + i + 2) * 2 + 4) * 2;
+        if (id == 2) return ((size_t)rd16(code + i + 2) * 4 + 2) * 2;
+        if (i + 8 <= clen) {
+            uint32_t ew = rd16(code + i + 2), cnt = rd32(code + i + 4);
+            return (((size_t)cnt * ew + 1) / 2 + 4) * 2;
+        }
+    }
+    return (size_t)DEX_INSN_W[op] * 2;
+}
+
+static int dex_str_eq(const uint8_t *dex, size_t dlen, uint32_t str_off, uint32_t str_cnt, uint32_t idx, const char *s) {
+    if (idx >= str_cnt) return 0;
+    size_t len = 0;
+    const uint8_t *p = dex_get_str(dex, dlen, str_off, idx, &len);
+    size_t slen = xstrlen(s);
+    return (p && len == slen && memcmp(p, s, slen) == 0);
+}
+
+static uint32_t dex_find_str_id(const uint8_t *dex, size_t dlen, const char *s) {
+    uint32_t str_cnt = rd32(dex + 56), str_off = rd32(dex + 60);
+    size_t slen = xstrlen(s);
+    for (uint32_t i = 0; i < str_cnt; i++) {
+        size_t len = 0;
+        const uint8_t *p = dex_get_str(dex, dlen, str_off, i, &len);
+        if (p && len == slen && memcmp(p, s, slen) == 0) return i;
+    }
+    return 0xFFFFFFFFu;
+}
+
+static uint32_t dex_find_meth_id(const uint8_t *dex, size_t dlen, const char *cls, const char *mth) {
+    uint32_t str_cnt = rd32(dex + 56), str_off = rd32(dex + 60);
+    uint32_t type_cnt = rd32(dex + 64), type_off = rd32(dex + 68);
+    uint32_t meth_cnt = rd32(dex + 88), meth_off = rd32(dex + 92);
+    uint32_t cls_sid = dex_find_str_id(dex, dlen, cls);
+    uint32_t mth_sid = dex_find_str_id(dex, dlen, mth);
+    if (cls_sid == 0xFFFFFFFFu || mth_sid == 0xFFFFFFFFu) return 0xFFFFFFFFu;
+    uint32_t cls_tid = 0xFFFFFFFFu;
+    for (uint32_t t = 0; t < type_cnt; t++) {
+        if ((size_t)type_off + (size_t)t * 4 + 4 > dlen) break;
+        if (rd32(dex + type_off + (size_t)t * 4) == cls_sid) { cls_tid = t; break; }
+    }
+    if (cls_tid == 0xFFFFFFFFu) return 0xFFFFFFFFu;
+    for (uint32_t m = 0; m < meth_cnt; m++) {
+        size_t mo = (size_t)meth_off + (size_t)m * 8;
+        if (mo + 8 > dlen) break;
+        if (rd16(dex + mo) == cls_tid && rd32(dex + mo + 4) == mth_sid) return m;
+    }
+    return 0xFFFFFFFFu;
+}
+
+static int dex_code_has_str(const uint8_t *code, size_t clen, uint32_t sid, size_t *out_pos) {
+    if (sid == 0xFFFFFFFFu) return 0;
+    size_t i = 0;
+    while (i < clen) {
+        size_t st = dex_insn_step(code, clen, i);
+        if (st == 0 || i + st > clen) break;
+        if (code[i] == 0x1a && st == 4 && rd16(code + i + 2) == sid) { if (out_pos) *out_pos = i; return 1; }
+        if (code[i] == 0x1b && st == 6 && rd32(code + i + 2) == sid) { if (out_pos) *out_pos = i; return 1; }
+        i += st;
+    }
+    return 0;
+}
+
+static int dex_code_has_invoke(const uint8_t *code, size_t clen, uint32_t mid, size_t *out_pos) {
+    if (mid == 0xFFFFFFFFu) return 0;
+    size_t i = 0;
+    while (i < clen) {
+        size_t st = dex_insn_step(code, clen, i);
+        if (st == 0 || i + st > clen) break;
+        uint8_t op = code[i];
+        if (((op >= 0x6e && op <= 0x72) || (op >= 0x74 && op <= 0x78)) && st == 6 && rd16(code + i + 2) == mid) {
+            if (out_pos) *out_pos = i;
+            return 1;
+        }
+        i += st;
+    }
+    return 0;
+}
+
+/* ProGuard-independent dynamic DEX patcher (HyperOS 4 & universal MiuiCamera support).
+ * Preserves native AlgoUp / LocalParallel / Garnet device features while fixing SAT roleId,
+ * VideoSAT/PhotoSAT enablement, anti-oversharpening, 0.6x UW LDC, and video bitrates. */
+static int apply_dex_dynamic(uint8_t *dex, size_t dlen, int *out_sat_anchors) {
+    if (dlen < 112 || memcmp(dex, "dex\n", 4) != 0) return 0;
+    uint32_t str_cnt  = rd32(dex + 56), str_off  = rd32(dex + 60);
+    uint32_t type_off = rd32(dex + 68);
+    uint32_t meth_off = rd32(dex + 92);
+    uint32_t cls_sz   = rd32(dex + 96), cls_off  = rd32(dex + 100);
+    int edits = 0;
+
+    uint32_t sid_getsat  = dex_find_str_id(dex, dlen, "Warning: getSATCameraId(): #init() failed.");
+    uint32_t sid_hassat  = dex_find_str_id(dex, dlen, "Warning: hasSATCamera(): #init() failed.");
+    uint32_t sid_vsatdbg = dex_find_str_id(dex, dlen, "supportVideoSAT: debug prop force true");
+    uint32_t sid_satldc  = dex_find_str_id(dex, dlen, "setSATUltraWideLDC: ");
+    uint32_t sid_h264    = dex_find_str_id(dex, dlen, "setupRecorder: H264 bitrate = ");
+    uint32_t sid_hevc    = dex_find_str_id(dex, dlen, "HEVC: no pre-defined bitrate for ");
+    uint32_t mid_sharp   = dex_find_meth_id(dex, dlen, "Lcom/android/camera2/compat/MiCameraCompatBaseImpl;", "applySharpness");
+    uint32_t mid_uwldc   = dex_find_meth_id(dex, dlen, "Lcom/android/camera2/compat/MiCameraCompatBaseImpl;", "applyUltraWideLDC");
+
+    uint32_t sharp_def_mid = 0xFFFFFFFFu;
+    uint32_t sat_cls_idx = 0xFFFFFFFFu;
+    uint16_t sat_dbg_fld = 0;
+    uint8_t  have_sat_dbg = 0;
+    uint32_t u0_coff = 0, h0_coff = 0;
+    int u0_cnt = 0, h0_cnt = 0;
+
+    /* Pass 1: single-method string/API patches & capture cross-method anchors */
+    for (uint32_t i = 0; i < cls_sz; i++) {
+        size_t co = (size_t)cls_off + (size_t)i * 32;
+        if (co + 32 > dlen) break;
+        uint32_t cidx = rd32(dex + co), cdata = rd32(dex + co + 24);
+        if (!cdata || (size_t)type_off + (size_t)cidx * 4 + 4 > dlen) continue;
+        uint32_t csidx = rd32(dex + type_off + (size_t)cidx * 4);
+        int is_cam2mod = dex_str_eq(dex, dlen, str_off, str_cnt, csidx, "Lcom/android/camera/module/Camera2Module;");
+        int is_basemod = dex_str_eq(dex, dlen, str_off, str_cnt, csidx, "Lcom/android/camera/module/BaseModule;");
+
+        size_t p = cdata;
+        uint32_t sf = read_uleb128(dex, dlen, &p), if_ = read_uleb128(dex, dlen, &p);
+        uint32_t dm = read_uleb128(dex, dlen, &p), vm  = read_uleb128(dex, dlen, &p);
+        for (uint32_t k = 0; k < sf + if_; k++) { read_uleb128(dex, dlen, &p); read_uleb128(dex, dlen, &p); }
+        for (int grp = 0; grp < 2; grp++) {
+            uint32_t cnt = (grp == 0) ? dm : vm, midx = 0;
+            for (uint32_t k = 0; k < cnt; k++) {
+                midx += read_uleb128(dex, dlen, &p);
+                read_uleb128(dex, dlen, &p);
+                uint32_t coff = read_uleb128(dex, dlen, &p);
+                if (!coff || (size_t)coff + 16 > dlen) continue;
+                uint16_t tries = rd16(dex + coff + 6);
+                uint32_t insns_sz = rd32(dex + coff + 12);
+                size_t clen = (size_t)insns_sz * 2;
+                if ((size_t)coff + 16 + clen > dlen) continue;
+                uint8_t *code = dex + coff + 16;
+
+                /* 1. getSATCameraId(): roleId 60 (0x3c) -> 62 (0x3e) */
+                if (sid_getsat != 0xFFFFFFFFu && clen <= 160 && dex_code_has_str(code, clen, sid_getsat, 0)) {
+                    for (size_t j = 0; j + 10 <= clen; j += 2) {
+                        if (code[j] == 0x13 && code[j + 2] == 0x3c && code[j + 3] == 0x00 &&
+                            code[j + 4] == 0x6e && code[j + 5] == 0x30) {
+                            code[j + 2] = 0x3e;
+                            edits++; (*out_sat_anchors)++; break;
+                        }
+                    }
+                }
+                /* 2. hasSATCamera(): roleId 60 (0x3c) -> 62 (0x3e) */
+                if (sid_hassat != 0xFFFFFFFFu && clen <= 160 && dex_code_has_str(code, clen, sid_hassat, 0)) {
+                    for (size_t j = 0; j + 10 <= clen; j += 2) {
+                        if (code[j] == 0x13 && code[j + 2] == 0x3c && code[j + 3] == 0x00 &&
+                            code[j + 4] == 0x6e && code[j + 5] == 0x20) {
+                            code[j + 2] = 0x3e;
+                            edits++; (*out_sat_anchors)++; break;
+                        }
+                    }
+                }
+                /* 3. DataItemFeature.isSupportVideoSAT() -> true */
+                if (sid_vsatdbg != 0xFFFFFFFFu && clen >= 24 && clen <= 120 &&
+                    code[0] == 0x60 && code[1] == 0x00 && dex_code_has_str(code, clen, sid_vsatdbg, 0)) {
+                    sat_cls_idx = i;
+                    sat_dbg_fld = rd16(code + 2);
+                    have_sat_dbg = 1;
+                    code[0] = 0x12; code[1] = 0x10; code[2] = 0x0f; code[3] = 0x00;
+                    edits++; (*out_sat_anchors)++;
+                }
+                /* 7a. Camera2Module.updateSharpness -> capture default sharpness static callee */
+                if (is_cam2mod && clen >= 24 && clen <= 80 && (size_t)meth_off + (size_t)midx * 8 + 8 <= dlen) {
+                    uint32_t mnidx = rd32(dex + meth_off + (size_t)midx * 8 + 4);
+                    if (dex_str_eq(dex, dlen, str_off, str_cnt, mnidx, "updateSharpness")) {
+                        size_t j = 0;
+                        while (j < clen) {
+                            size_t st = dex_insn_step(code, clen, j);
+                            if (st == 0 || j + st > clen) break;
+                            if (code[j] == 0x71 && code[j + 1] == 0x10 && st == 6) {
+                                sharp_def_mid = rd16(code + j + 2); break;
+                            }
+                            j += st;
+                        }
+                    }
+                }
+                /* 8a. Candidate applySharpness wrapper (len == 32) */
+                if (mid_sharp != 0xFFFFFFFFu && clen == 32 &&
+                    code[0] == 0x39 && code[1] == 0x01 && code[2] == 0x03 && code[3] == 0x00 &&
+                    code[4] == 0x0e && code[5] == 0x00 && code[6] == 0x52 && code[7] == 0x22 &&
+                    code[10] == 0x12 && code[11] == 0xf0 && code[12] == 0x32 && code[13] == 0x02 &&
+                    code[14] == 0x09 && code[15] == 0x00 && dex_code_has_invoke(code, clen, mid_sharp, 0)) {
+                    u0_coff = coff; u0_cnt++;
+                }
+                /* 9a. Candidate applyUltraWideLDC wrapper (len == 54) */
+                if (mid_uwldc != 0xFFFFFFFFu && clen == 54 &&
+                    code[28] == 0x0a && code[30] == 0x38 && code[29] == code[31] &&
+                    code[32] == 0x0b && code[33] == 0x00 && dex_code_has_invoke(code, clen, mid_uwldc, 0)) {
+                    h0_coff = coff; h0_cnt++;
+                }
+                /* 10. BaseModule.updateUltraWideLDC: bypass B0 check before setSATUltraWideLDC */
+                if (is_basemod && sid_satldc != 0xFFFFFFFFu && (size_t)meth_off + (size_t)midx * 8 + 8 <= dlen) {
+                    uint32_t mnidx = rd32(dex + meth_off + (size_t)midx * 8 + 4);
+                    size_t spos = 0;
+                    if (dex_str_eq(dex, dlen, str_off, str_cnt, mnidx, "updateUltraWideLDC") &&
+                        dex_code_has_str(code, clen, sid_satldc, &spos) && spos >= 24) {
+                        size_t lo = (spos > 64) ? (spos - 64) : 0;
+                        for (size_t j = spos - 6; j >= lo; j -= 2) {
+                            if (code[j] == 0x0a && code[j + 1] == 0x00 &&
+                                code[j + 2] == 0x38 && code[j + 3] == 0x00 && code[j + 5] == 0x00) {
+                                code[j + 2] = 0; code[j + 3] = 0; code[j + 4] = 0; code[j + 5] = 0;
+                                edits++; break;
+                            }
+                            if (j < lo + 2) break;
+                        }
+                    }
+                }
+                /* 11. H.264 bitrate boost (20M->40M, 50M->75M) */
+                size_t hpos = 0;
+                if (tries == 0 && sid_h264 != 0xFFFFFFFFu && clen >= 1024 &&
+                    dex_code_has_str(code, clen, sid_h264, &hpos) && hpos >= 80 &&
+                    code[hpos - 4] == 0x02 && code[hpos - 3] == 0x02 && code[hpos - 1] == 0x00) {
+                    uint8_t vsrc = code[hpos - 2];
+                    size_t lo = (hpos > 240) ? (hpos - 240) : 0;
+                    size_t start = 0;
+                    for (size_t j = hpos - 64; j >= lo; j -= 2) {
+                        if (code[j] == 0x02 && code[j + 1] == vsrc && code[j + 2] == 0x02 && code[j + 3] == 0x00 &&
+                            code[j + 4] == 0x62 && code[j + 5] == 0x02) {
+                            start = j + 4; break;
+                        }
+                        if (j < lo + 2) break;
+                    }
+                    if (start && hpos > start && (hpos - start) >= 64 && (hpos - start) <= 240) {
+                        size_t span = hpos - start;
+                        int d1 = (int)(span - 18) / 2;
+                        int d2 = (int)(span - 26) / 2;
+                        int d3 = (int)(span - 38) / 2;
+                        if (d1 > 0 && d1 < 127 && d2 > 0 && d2 < 32767 && d3 > 0 && d3 < 127) {
+                            uint8_t patch[44] = {
+                                0x02, 0x02, vsrc, 0x00,             /* move/from16 v2, vSrc */
+                                0x14, 0x03, 0x40, 0x78, 0x7d, 0x01, /* const v3, 25000000 */
+                                0x35, 0x32, 0x05, 0x00,             /* if-ge v2, v3, +5 */
+                                0xda, 0x02, 0x02, 0x02,             /* mul-int/lit8 v2, v2, #2 */
+                                0x28, (uint8_t)d1,                  /* goto hpos */
+                                0x14, 0x03, 0x00, 0x87, 0x93, 0x03, /* const v3, 60000000 */
+                                0x35, 0x32, (uint8_t)(d2 & 0xFF), (uint8_t)(d2 >> 8), /* if-ge v2, v3, hpos */
+                                0xda, 0x02, 0x02, 0x03,             /* mul-int/lit8 v2, v2, #3 */
+                                0xdb, 0x02, 0x02, 0x02,             /* div-int/lit8 v2, v2, #2 */
+                                0x28, (uint8_t)d3,                  /* goto hpos */
+                                0x00, 0x00, 0x00, 0x00
+                            };
+                            memcpy(code + start, patch, 44);
+                            memset(code + start + 44, 0, span - 44);
+                            edits++;
+                        }
+                    }
+                }
+                /* 12. HEVC bitrate 2x boost (15.4M->30.8M, 38.5M->77M) */
+                if (tries == 0 && sid_hevc != 0xFFFFFFFFu && clen >= 64 && clen <= 600 &&
+                    dex_code_has_str(code, clen, sid_hevc, 0)) {
+                    uint8_t ret_op = code[clen - 2], r = code[clen - 1];
+                    uint8_t rr = (uint8_t)((r << 4) | r);
+                    if (ret_op == 0x0f && r < 16 &&
+                        code[clen - 6] == 0x52 && code[clen - 5] == rr &&
+                        code[clen - 26] == 0x28 && code[clen - 25] == 0x0c) {
+                        uint8_t fid0 = code[clen - 4], fid1 = code[clen - 3];
+                        /* Retarget all goto (0x28) pointing at clen-2 -> clen-6 (mul-int/lit8 *2) */
+                        size_t j = 0;
+                        while (j < clen - 24) {
+                            size_t st = dex_insn_step(code, clen, j);
+                            if (st == 0 || j + st > clen) break;
+                            if (code[j] == 0x28 && st == 2) {
+                                int8_t rel = (int8_t)code[j + 1];
+                                if ((int)j + (int)rel * 2 == (int)(clen - 2) && rel >= 4) {
+                                    code[j + 1] = (uint8_t)(rel - 2);
+                                }
+                            }
+                            j += st;
+                        }
+                        memset(code + clen - 24, 0, 14);
+                        code[clen - 10] = 0x52; code[clen - 9] = rr; code[clen - 8] = fid0; code[clen - 7] = fid1;
+                        code[clen - 6]  = 0xda; code[clen - 5] = r;  code[clen - 4] = r;    code[clen - 3] = 0x02;
+                        edits++;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Commit unique single-candidate wrappers (8 & 9) */
+    if (u0_cnt == 1) {
+        static const uint8_t rep_u0[6] = {0x3b, 0x02, 0x03, 0x00, 0x12, 0x02};
+        memcpy(dex + u0_coff + 16 + 10, rep_u0, 6);
+        edits++;
+    }
+    if (h0_cnt == 1) {
+        memset(dex + h0_coff + 16 + 30, 0, 4);
+        edits++;
+    }
+
+    /* Pass 2: cross-method patches (4. isSupportSAT & 7b. default sharpness callee) */
+    if (have_sat_dbg && sat_cls_idx < cls_sz) {
+        size_t co = (size_t)cls_off + (size_t)sat_cls_idx * 32;
+        uint32_t cdata = rd32(dex + co + 24);
+        size_t p = cdata;
+        uint32_t sf = read_uleb128(dex, dlen, &p), if_ = read_uleb128(dex, dlen, &p);
+        uint32_t dm = read_uleb128(dex, dlen, &p), vm  = read_uleb128(dex, dlen, &p);
+        for (uint32_t k = 0; k < sf + if_; k++) { read_uleb128(dex, dlen, &p); read_uleb128(dex, dlen, &p); }
+        uint32_t sat_coff = 0; int sat_cnt = 0;
+        for (int grp = 0; grp < 2; grp++) {
+            uint32_t cnt = (grp == 0) ? dm : vm, midx = 0;
+            for (uint32_t k = 0; k < cnt; k++) {
+                midx += read_uleb128(dex, dlen, &p);
+                read_uleb128(dex, dlen, &p);
+                uint32_t coff = read_uleb128(dex, dlen, &p);
+                if (!coff || (size_t)coff + 16 > dlen) continue;
+                size_t clen = (size_t)rd32(dex + coff + 12) * 2;
+                if (clen == 34 && (size_t)coff + 16 + clen <= dlen) {
+                    const uint8_t *code = dex + coff + 16;
+                    if (code[0] == 0x54 && code[4] == 0x6e && code[16] == 0x60 && code[17] == 0x01 &&
+                        rd16(code + 18) == sat_dbg_fld) {
+                        sat_coff = coff; sat_cnt++;
+                    }
+                }
+            }
+        }
+        if (sat_cnt == 1) {
+            uint8_t *code = dex + sat_coff + 16;
+            code[0] = 0x12; code[1] = 0x10; code[2] = 0x0f; code[3] = 0x00;
+            edits++; (*out_sat_anchors)++;
+        }
+    }
+
+    if (sharp_def_mid != 0xFFFFFFFFu) {
+        for (uint32_t i = 0; i < cls_sz; i++) {
+            size_t co = (size_t)cls_off + (size_t)i * 32;
+            if (co + 32 > dlen) break;
+            uint32_t cdata = rd32(dex + co + 24);
+            if (!cdata) continue;
+            size_t p = cdata;
+            uint32_t sf = read_uleb128(dex, dlen, &p), if_ = read_uleb128(dex, dlen, &p);
+            uint32_t dm = read_uleb128(dex, dlen, &p), vm  = read_uleb128(dex, dlen, &p);
+            for (uint32_t k = 0; k < sf + if_; k++) { read_uleb128(dex, dlen, &p); read_uleb128(dex, dlen, &p); }
+            for (int grp = 0; grp < 2; grp++) {
+                uint32_t cnt = (grp == 0) ? dm : vm, midx = 0;
+                for (uint32_t k = 0; k < cnt; k++) {
+                    midx += read_uleb128(dex, dlen, &p);
+                    read_uleb128(dex, dlen, &p);
+                    uint32_t coff = read_uleb128(dex, dlen, &p);
+                    if (midx == sharp_def_mid && coff && (size_t)coff + 32 <= dlen) {
+                        uint8_t *code = dex + coff + 16;
+                        if (code[0] == 0x12 && code[1] == 0x10 && code[2] == 0x71 && code[3] == 0x10 &&
+                            code[8] == 0x0c && code[9] == 0x01 && code[10] == 0x39 && code[11] == 0x04 &&
+                            code[14] == 0x0f && code[15] == 0x00) {
+                            static const uint8_t zret[8] = {0x12, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00};
+                            memcpy(code, zret, 8);
+                            edits++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* 5 & 6. Universal VideoSAT maxZoom 12.0f->10.0f & ~335ms spline timing (Common) */
+    edits += apply_pat_rules(dex, dlen, &DEX_PAT_RULES[26], 2);
+    return edits;
+}
+
 static int cmd_patch_apk(const char *src, const char *dst) {
     size_t sz = 0;
     uint8_t *buf = read_file_all(src, &sz);
@@ -1385,13 +1763,56 @@ static int cmd_patch_apk(const char *src, const char *dst) {
         pos += 46 + nlen + elen + clen;
     }
 
-    /* Require >=20 total edits and >=2 exact class/method anchors so incompatible APK versions are never half-patched */
+    /* Tier 1: Exact OOS16/OS3 ported MiuiCamera full patch (>=20 edits & >=2 exact method anchors).
+     * Tier 2: ProGuard-independent dynamic string/API-anchored patch (HyperOS 4 & native MiuiCamera). */
     if (total_edits < 20 || meth_edits < 2) {
         free_buf(buf, sz + 4096);
-        xputs(1, "[SKIP] APK incompatible ("); xput_u32(1, (uint32_t)total_edits);
-        xputs(1, " edits, "); xput_u32(1, (uint32_t)meth_edits);
-        xputs(1, " method anchors; keeping stock APK)\n");
-        return 3;
+        buf = read_file_all(src, &sz);
+        if (!buf) { xputs(2, "ERR: cannot re-read APK\n"); return 1; }
+        int dyn_edits = 0, sat_anchors = 0, dyn_dex = 0;
+        pos = cd_off;
+        while (pos + 46 <= (size_t)cd_off + cd_sz) {
+            if (rd32(buf + pos) != 0x02014b50u) break;
+            uint16_t comp = rd16(buf + pos + 10);
+            uint32_t csz  = rd32(buf + pos + 20);
+            uint16_t nlen = rd16(buf + pos + 28);
+            uint16_t elen = rd16(buf + pos + 30);
+            uint16_t clen = rd16(buf + pos + 32);
+            uint32_t lh_off = rd32(buf + pos + 42);
+            const uint8_t *nm = buf + pos + 46;
+            if (comp == 0 && is_classes_dex(nm, nlen) && (size_t)lh_off + 30 <= sz) {
+                uint16_t lnlen = rd16(buf + lh_off + 26);
+                uint16_t lelen = rd16(buf + lh_off + 28);
+                size_t doff = (size_t)lh_off + 30 + lnlen + lelen;
+                if (doff + csz <= sz) {
+                    uint8_t *dex = buf + doff;
+                    int e = apply_dex_dynamic(dex, csz, &sat_anchors);
+                    if (e > 0) {
+                        sha1_calc(dex + 32, csz - 32, dex + 12);
+                        wr32(dex + 8, adler32_calc(dex + 12, csz - 12));
+                        uint32_t ncrc = crc32_calc(dex, csz);
+                        wr32(buf + lh_off + 14, ncrc);
+                        wr32(buf + pos + 16, ncrc);
+                        dyn_edits += e;
+                        dyn_dex++;
+                    }
+                }
+            }
+            pos += 46 + nlen + elen + clen;
+        }
+        if (dyn_edits < 6 || sat_anchors < 2) {
+            free_buf(buf, sz + 4096);
+            xputs(1, "[SKIP] APK incompatible ("); xput_u32(1, (uint32_t)dyn_edits);
+            xputs(1, " dynamic edits, "); xput_u32(1, (uint32_t)sat_anchors);
+            xputs(1, " SAT anchors; keeping stock APK)\n");
+            return 3;
+        }
+        int rc = write_file_all(dst, buf, sz);
+        free_buf(buf, sz + 4096);
+        if (rc != 0) { xputs(2, "ERR: failed to write patched APK\n"); return 1; }
+        xputs(1, "[OK] patched APK (universal dynamic): "); xput_u32(1, (uint32_t)dyn_edits);
+        xputs(1, " edits across "); xput_u32(1, (uint32_t)dyn_dex); xputs(1, " dex files\n");
+        return 0;
     }
 
     int rc = write_file_all(dst, buf, sz);

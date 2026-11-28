@@ -12,7 +12,7 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
 done
 sleep 3
 
-echo "=== Garnet Camera Fix v1.4 post-boot ($(date 2>/dev/null || true)) ===" >> "$LOG"
+echo "=== Garnet Camera Fix v1.5 post-boot ($(date 2>/dev/null || true)) ===" >> "$LOG"
 chmod 0755 "$PATCHER" 2>/dev/null || true
 
 RESETPROP="$(command -v resetprop 2>/dev/null || true)"
