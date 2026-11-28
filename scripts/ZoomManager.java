@@ -15,9 +15,11 @@ import java.lang.reflect.Method;
  */
 public final class ZoomManager {
     private static final String TAG = "GarnetZoomSmoother";
-    private static final float TAU_MS = 115.0f;                 // responsive ease-out time constant
-    private static final float ZOOM_OUT_ALPHA_SCALE = 0.703125f; // gentler log-zoom deceleration on zoom out (45/64)
-    private static final float SNAP_EPSILON = 0.001f;
+    private static final float TAU_MS = 115.0f;                  // responsive ease-out time constant
+    private static final float ZOOM_OUT_ALPHA_SCALE = 0.36f;     // ultra-smooth log-zoom deceleration on zoom out
+    private static final float ZOOM_OUT_RAMP_MS = 220.0f;        // smoothstep soft-start across Wide->UW SAT handoff
+    private static final float ZOOM_OUT_MIN_RAMP = 0.20f;
+    private static final float SNAP_EPSILON = 0.0018f;
     private static final long MIN_VSYNC_DT_MS = 4L;
     private static final long MAX_ANIM_MS = 2000L;
 
@@ -195,8 +197,8 @@ public final class ZoomManager {
         float dt;
         if (frameCount == 0 && rawDt <= 0L) {
             dt = 16.0f;
-        } else if (rawDt > 50L) {
-            dt = 50.0f;
+        } else if (rawDt > 24L) {
+            dt = 24.0f;
         } else {
             dt = (float) rawDt;
         }
@@ -211,10 +213,17 @@ public final class ZoomManager {
             alpha = 1.0f;
         }
 
+        long totalElapsed = now - animStartTimeMs;
         float next;
         if (target <= cur) {
-            // Zoom OUT: gentler log-zoom deceleration
-            alpha *= ZOOM_OUT_ALPHA_SCALE;
+            // Zoom OUT: smoothstep soft-start across Wide->UW handoff + ultra-smooth log-zoom deceleration
+            float ramp = 1.0f;
+            if (totalElapsed < ZOOM_OUT_RAMP_MS) {
+                float x = Math.max(0.0f, totalElapsed / ZOOM_OUT_RAMP_MS);
+                float s = x * x * (3.0f - 2.0f * x);
+                ramp = ZOOM_OUT_MIN_RAMP + (1.0f - ZOOM_OUT_MIN_RAMP) * s;
+            }
+            alpha *= ZOOM_OUT_ALPHA_SCALE * ramp;
             next = (float) (cur * Math.pow(target / cur, alpha));
         } else {
             // Zoom IN: responsive linear exponential ease-out
@@ -222,7 +231,6 @@ public final class ZoomManager {
         }
 
         frameCount++;
-        long totalElapsed = now - animStartTimeMs;
         long sinceRetarget = now - lastRetargetTimeMs;
         boolean done = Math.abs(target - next) < SNAP_EPSILON || sinceRetarget >= MAX_ANIM_MS;
         if (done) {
