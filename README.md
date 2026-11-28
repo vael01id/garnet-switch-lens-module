@@ -18,7 +18,8 @@ Universal, **zero-overlay anti-bootloop** Magisk / KernelSU / APatch module to f
 - **Strict ELF64/AArch64 & pattern verification (`garnet_patcher`):** validates ELF headers, RX `PT_LOAD` segment bounds, ARM64 instruction alignment, ADRP+ADD `.rodata` targets, atomic `chi_override` matching, and APK anchor thresholds. Incompatible files are skipped cleanly (stock untouched) and logged to `/data/adb/modules/garnet_oos16_uw_fix/patch.log`.
 - **Auto-re-patch on ROM/APK updates:** detects changed stock vendor or APK stamps and re-patches cleanly after updates.
 
-## What's Fixed in `v1.6`
+## What's Fixed in `v1.6` – `v1.6.1`
+- **OV64B40 & IMX355 Chromatix AWB tuning (`v1.6.1`, `garnet_patcher patch-tuned`):** CRC32-verified dynamic `triglGAV1` WB patcher removes Main Cam (`OV64B40`) magenta/purple tint (`R*0.980, B*0.983`) and matches UltraWide (`IMX355` Global) warmth & tint to Main Cam (`R*0.998, B*0.954`).
 - **Native lens switching & quick zoom buttons:** updated **`[0.6x, 1x, 3x, 5x, 10x]`** buttons in Photo (`163`) and Video (`162`) modes with live bidirectional slider (`0.6x ↔ 1x ↔ 10x`).
 - **Klee-style smooth zoom curve:** built-in `ZoomManager` VSync smoother (`500ms` UI + `tau = 115ms`) with asymmetric response — linear exponential ease-out on Zoom IN (`0.6x → 10x`) and gentler log-zoom (`× 0.703`) on Zoom OUT (`10x / 1x → 0.6x`).
 - **UltraWide (`0.6x`), Macro, 64MP (`OV64B40`), and Pro mode:** fully working including Pro mode display string crash fix.
@@ -30,7 +31,7 @@ Universal, **zero-overlay anti-bootloop** Magisk / KernelSU / APatch module to f
 - **60fps support:** `1080p60` enabled on Wide / VideoSAT, with automatic safe fallback to `1080p30` + EIS on UltraWide, Front, and Macro.
 
 ## Installation
-1. Download `garnet-camera-fix-v1.6-klee-smooth.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest) (or `dist/garnet-camera-fix-v1.6-klee-smooth.zip`).
+1. Download `garnet-camera-fix-v1.6.1.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest) (or `dist/garnet-camera-fix-v1.6.1.zip`).
 2. If you previously used **Klee Zoom Mod** (LSPosed / Vector), disable or remove `com.android.camera` from its scope to avoid double-hooking `ZoomManager`.
 3. Flash in Magisk Manager / KernelSU / APatch and reboot. Inspect `/data/adb/modules/garnet_oos16_uw_fix/patch.log` after boot if needed.
 

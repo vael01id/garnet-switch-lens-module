@@ -19,11 +19,12 @@ chmod 0755 "$PATCHER"
 rm -rf "$MODPATH/system" "$MODPATH/vendor" "$MODPATH/system.prop" 2>/dev/null || true
 mkdir -p "$MODPATH/patched_vendor/etc/camera"
 mkdir -p "$MODPATH/patched_vendor/lib64/hw"
+mkdir -p "$MODPATH/patched_vendor/lib64/camera"
 mkdir -p "$MODPATH/apk/empty_oat"
 
 LOG="$MODPATH/patch.log"
 : > "$LOG"
-echo "=== Garnet Camera Fix v1.6 install ($(date 2>/dev/null || true)) ===" >> "$LOG"
+echo "=== Garnet Camera Fix v1.6.1 install ($(date 2>/dev/null || true)) ===" >> "$LOG"
 echo "ROM: $(getprop ro.build.fingerprint)" >> "$LOG"
 
 file_stamp() {
@@ -66,10 +67,14 @@ else
     fi
   fi
 
-  patch_hal_file() {
-    local KIND="$1" SRC="$2" DST="$3" RC=0
+  patch_vendor_file() {
+    local MODE="$1" KIND="$2" SRC="$3" DST="$4" RC=0
     [ -f "$SRC" ] || return 0
-    "$PATCHER" patch-hal "$KIND" "$SRC" "$DST" >> "$LOG" 2>&1
+    if [ "$MODE" = "tuned" ]; then
+      "$PATCHER" patch-tuned "$KIND" "$SRC" "$DST" >> "$LOG" 2>&1
+    else
+      "$PATCHER" patch-hal "$KIND" "$SRC" "$DST" >> "$LOG" 2>&1
+    fi
     RC=$?
     if [ "$RC" -eq 0 ] && [ -f "$DST" ]; then
       file_stamp "$SRC" > "${DST}.src_stamp"
@@ -80,10 +85,12 @@ else
     fi
   }
 
-  patch_hal_file camera_qcom      /vendor/lib64/hw/camera.qcom.so                 "$MODPATH/patched_vendor/lib64/hw/camera.qcom.so"
-  patch_hal_file chi_override     /vendor/lib64/hw/com.qti.chi.override.so        "$MODPATH/patched_vendor/lib64/hw/com.qti.chi.override.so"
-  patch_hal_file mcreprocrt       /vendor/lib64/com.qti.feature2.mcreprocrt.so    "$MODPATH/patched_vendor/lib64/com.qti.feature2.mcreprocrt.so"
-  patch_hal_file feature2_generic /vendor/lib64/com.qti.feature2.generic.so       "$MODPATH/patched_vendor/lib64/com.qti.feature2.generic.so"
+  patch_vendor_file hal   camera_qcom      /vendor/lib64/hw/camera.qcom.so                              "$MODPATH/patched_vendor/lib64/hw/camera.qcom.so"
+  patch_vendor_file hal   chi_override     /vendor/lib64/hw/com.qti.chi.override.so                     "$MODPATH/patched_vendor/lib64/hw/com.qti.chi.override.so"
+  patch_vendor_file hal   mcreprocrt       /vendor/lib64/com.qti.feature2.mcreprocrt.so                 "$MODPATH/patched_vendor/lib64/com.qti.feature2.mcreprocrt.so"
+  patch_vendor_file hal   feature2_generic /vendor/lib64/com.qti.feature2.generic.so                    "$MODPATH/patched_vendor/lib64/com.qti.feature2.generic.so"
+  patch_vendor_file tuned wide             /vendor/lib64/camera/com.qti.tuned.garnet_aac_ov64b40_wide_i.bin "$MODPATH/patched_vendor/lib64/camera/com.qti.tuned.garnet_aac_ov64b40_wide_i.bin"
+  patch_vendor_file tuned ultra            /vendor/lib64/camera/com.qti.tuned.garnet_ofilm_imx355_ultra_global_ii.bin "$MODPATH/patched_vendor/lib64/camera/com.qti.tuned.garnet_ofilm_imx355_ultra_global_ii.bin"
 fi
 
 CAM_APK="$(pm path com.android.camera 2>/dev/null | head -n 1 | sed 's/^package://')"

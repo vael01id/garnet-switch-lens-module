@@ -1,6 +1,6 @@
 id=garnet_oos16_uw_fix
 name=Garnet Native Lens Switch & Camera Fix
-version=v1.6
-versionCode=160
+version=v1.6.1
+versionCode=161
 author=Vael
-description=Universal zero-overlay anti-bootloop camera & lens switch fix for garnet (OOS16, HyperOS 1/2/3/4 CN/Global/ID/EU, Lunaris & AOSP; Magisk/KSU/APatch): post-boot bind-mounts only, built-in asymmetric Klee-style ZoomManager smoother (no LSPosed), [0.6x, 1x, 3x, 5x, 10x] zoom buttons, universal dynamic ARM64 chi_override resolver, ProGuard-independent dynamic MiuiCamera APK patcher, native Photo/Video SAT lens switching, surgical Titan570 Luma-only NR bypass (TF20 Chroma refinement active), 0.6x UW LDC, and thermally balanced video bitrates.
+description=Universal zero-overlay anti-bootloop camera & lens switch fix for garnet (OOS16, HyperOS 1/2/3/4 CN/Global/ID/EU, Lunaris & AOSP; Magisk/KSU/APatch): post-boot bind-mounts only, built-in asymmetric Klee-style ZoomManager smoother (no LSPosed), [0.6x, 1x, 3x, 5x, 10x] zoom buttons, universal dynamic ARM64 chi_override resolver, ProGuard-independent dynamic MiuiCamera APK patcher, native Photo/Video SAT lens switching, surgical Titan570 Luma-only NR bypass (TF20 Chroma refinement active), OV64B40/IMX355 Chromatix WB tuning, and thermally balanced video bitrates.

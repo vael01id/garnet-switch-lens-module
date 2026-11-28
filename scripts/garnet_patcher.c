@@ -11,9 +11,10 @@
  *     scripts/garnet_patcher.c -o module/bin/arm64/garnet_patcher
  *
  * Commands:
- *   garnet_patcher patch-camx <src_or_dash> <dst>
- *   garnet_patcher patch-hal  <camera_qcom|chi_override|mcreprocrt|feature2_generic> <src> <dst>
- *   garnet_patcher patch-apk  <src.apk> <dst.apk>
+ *   garnet_patcher patch-camx  <src_or_dash> <dst>
+ *   garnet_patcher patch-hal   <camera_qcom|chi_override|mcreprocrt|feature2_generic> <src> <dst>
+ *   garnet_patcher patch-tuned <wide|ultra> <src.bin> <dst.bin>
+ *   garnet_patcher patch-apk   <src.apk> <dst.apk>
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -977,6 +978,138 @@ static int cmd_patch_hal(const char *kind, const char *src, const char *dst) {
 }
 
 /* =========================================================================
+ * 5b. Chromatix7 triglGAV1 AWB Gain-Adjust Patcher (OV64B40 Wide & IMX355 UW)
+ * ========================================================================= */
+typedef struct {
+    char kind[8];
+    size_t align_step;
+    size_t min_cnt;
+    double r_max, b_min;
+    int check_cct_tail;
+    double r_mul, b_mul;
+} TunedWbSpec;
+
+static const TunedWbSpec TUNED_WB_SPECS[] = {
+    /* OV64B40 Main Cam: remove purple tint cleanly while keeping subtle natural warmth */
+    { "wide",  4, 150, 1.25, 0.75, 0, 0.980, 0.983 },
+    /* IMX355 UltraWide Global: matched to OV64B40 Main Cam warmth & tint */
+    { "ultra", 1, 200, 1.15, 0.80, 1, 0.998, 0.954 },
+};
+
+static float rdf32(const uint8_t *p) {
+    uint32_t u = rd32(p);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
+static void wrf32(uint8_t *p, float f) {
+    uint32_t u;
+    memcpy(&u, &f, 4);
+    wr32(p, u);
+}
+
+static int find_trigl_gav1_table(const uint8_t *buf, size_t sz, const TunedWbSpec *sp,
+                                 size_t *out_off, size_t *out_cnt, size_t *out_cct_off) {
+    static const uint8_t ONE_F[4] = {0x00, 0x00, 0x80, 0x3f};
+    size_t hits = 0, best_off = 0, best_cnt = 0, best_cct = 0;
+    size_t pos = 0x100000;
+
+    while (pos + 20 * sp->min_cnt + 4 <= sz) {
+        size_t f1 = find_bytes(buf, sz - 4, ONE_F, 4, pos + 12);
+        if (f1 == (size_t)-1) break;
+        size_t off = f1 - 12;
+        if (sp->align_step == 4 && (off & 3) != 0) {
+            pos = off + (4 - (off & 3));
+            continue;
+        }
+        size_t cnt = 0, non_unity = 0, j = off;
+        while (j + 20 <= sz - 4) {
+            float s = rdf32(buf + j), e = rdf32(buf + j + 4);
+            float r = rdf32(buf + j + 8), g = rdf32(buf + j + 12), b = rdf32(buf + j + 16);
+            if (s >= 0.0f && s <= e && e <= 1000.0f && !(s == 0.0f && e == 0.0f) &&
+                g == 1.0f && r >= 0.95f && (double)r <= sp->r_max &&
+                (double)b >= sp->b_min && b <= 1.08f) {
+                if (r != 1.0f || b != 1.0f) non_unity++;
+                cnt++;
+                j += 20;
+            } else {
+                break;
+            }
+        }
+        if (cnt >= sp->min_cnt && non_unity >= 50) {
+            size_t cct_off = 0;
+            int tail_ok = !sp->check_cct_tail;
+            if (sp->check_cct_tail && j + 36 <= sz - 4) {
+                float s2 = rdf32(buf + j + 16), e2 = rdf32(buf + j + 20), g2 = rdf32(buf + j + 28);
+                if (s2 == 1500.0f && e2 == 12000.0f && g2 == 1.0f) {
+                    cct_off = j + 16;
+                    tail_ok = 1;
+                }
+            }
+            if (tail_ok) {
+                hits++;
+                best_off = off; best_cnt = cnt; best_cct = cct_off;
+            }
+            pos = j + 20;
+            continue;
+        }
+        pos = off + sp->align_step;
+    }
+    if (hits != 1) return 0;
+    *out_off = best_off;
+    *out_cnt = best_cnt;
+    *out_cct_off = best_cct;
+    return 1;
+}
+
+static int cmd_patch_tuned(const char *kind, const char *src, const char *dst) {
+    const TunedWbSpec *sp = (const TunedWbSpec *)0;
+    for (size_t i = 0; i < ARRAY_LEN(TUNED_WB_SPECS); i++) {
+        if (xstrcmp(kind, TUNED_WB_SPECS[i].kind) == 0) { sp = &TUNED_WB_SPECS[i]; break; }
+    }
+    if (!sp) { xputs(2, "ERR: unknown tuned kind\n"); return 2; }
+
+    size_t sz = 0;
+    uint8_t *buf = read_file_all(src, &sz);
+    if (!buf) { xputs(2, "[ERR] cannot read tuned file\n"); return 1; }
+    if (sz < 0x200000 || memcmp(buf, "QTI Chromatix Header", 20) != 0 ||
+        crc32_calc(buf, sz - 4) != rd32(buf + sz - 4)) {
+        free_buf(buf, sz + 4096);
+        xputs(1, "[SKIP] "); xputs(1, kind); xputs(1, ": invalid Chromatix header/CRC32 (keeping stock)\n");
+        return 3;
+    }
+
+    size_t off = 0, cnt = 0, cct_off = 0;
+    if (!find_trigl_gav1_table(buf, sz, sp, &off, &cnt, &cct_off)) {
+        free_buf(buf, sz + 4096);
+        xputs(1, "[SKIP] "); xputs(1, kind); xputs(1, ": triglGAV1 WB table not uniquely matched (keeping stock)\n");
+        return 3;
+    }
+
+    size_t patched = 0;
+    for (size_t k = 0; k < cnt; k++) {
+        size_t eoff = off + k * 20;
+        wrf32(buf + eoff + 8,  (float)((double)rdf32(buf + eoff + 8)  * sp->r_mul));
+        wrf32(buf + eoff + 16, (float)((double)rdf32(buf + eoff + 16) * sp->b_mul));
+        patched++;
+    }
+    if (cct_off) {
+        wrf32(buf + cct_off + 8,  (float)((double)rdf32(buf + cct_off + 8)  * sp->r_mul));
+        wrf32(buf + cct_off + 16, (float)((double)rdf32(buf + cct_off + 16) * sp->b_mul));
+        patched++;
+    }
+    wr32(buf + sz - 4, crc32_calc(buf, sz - 4));
+
+    int rc = write_file_all(dst, buf, sz);
+    free_buf(buf, sz + 4096);
+    if (rc != 0) { xputs(2, "ERR: failed to write tuned output\n"); return 1; }
+    xputs(1, "[OK] tuned "); xputs(1, kind); xputs(1, ": patched ");
+    xput_u32(1, (uint32_t)patched); xputs(1, " triglGAV1 entries\n");
+    return 0;
+}
+
+/* =========================================================================
  * 6. DEX Parser, Tier-1 Method Rules & Tier-2 Universal Dynamic DEX Patcher
  * ========================================================================= */
 typedef struct {
@@ -1703,12 +1836,13 @@ static int cmd_patch_apk(const char *src, const char *dst) {
  * ========================================================================= */
 static int main_c(int argc, char **argv) {
     if (argc < 4) {
-        xputs(2, "Usage: garnet_patcher <patch-camx|patch-hal|patch-apk> ...\n");
+        xputs(2, "Usage: garnet_patcher <patch-camx|patch-hal|patch-tuned|patch-apk> ...\n");
         return 2;
     }
-    if (xstrcmp(argv[1], "patch-camx") == 0 && argc == 4) return cmd_patch_camx(argv[2], argv[3]);
-    if (xstrcmp(argv[1], "patch-hal") == 0 && argc == 5)  return cmd_patch_hal(argv[2], argv[3], argv[4]);
-    if (xstrcmp(argv[1], "patch-apk") == 0 && argc == 4)  return cmd_patch_apk(argv[2], argv[3]);
+    if (xstrcmp(argv[1], "patch-camx") == 0 && argc == 4)  return cmd_patch_camx(argv[2], argv[3]);
+    if (xstrcmp(argv[1], "patch-hal") == 0 && argc == 5)   return cmd_patch_hal(argv[2], argv[3], argv[4]);
+    if (xstrcmp(argv[1], "patch-tuned") == 0 && argc == 5) return cmd_patch_tuned(argv[2], argv[3], argv[4]);
+    if (xstrcmp(argv[1], "patch-apk") == 0 && argc == 4)   return cmd_patch_apk(argv[2], argv[3]);
     xputs(2, "ERR: invalid arguments\n");
     return 2;
 }

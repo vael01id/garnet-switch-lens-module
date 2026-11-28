@@ -12,7 +12,7 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
 done
 sleep 3
 
-echo "=== Garnet Camera Fix v1.6 post-boot ($(date 2>/dev/null || true)) ===" >> "$LOG"
+echo "=== Garnet Camera Fix v1.6.1 post-boot ($(date 2>/dev/null || true)) ===" >> "$LOG"
 chmod 0755 "$PATCHER" 2>/dev/null || true
 
 RESETPROP="$(command -v resetprop 2>/dev/null || true)"
@@ -71,7 +71,7 @@ ensure_cam_prop persist.camera.privapp.list        "$PRIV_FALLBACK"
 ensure_cam_prop vendor.camera.aux.packagelist      "$AUX_FALLBACK"
 
 # 2. Ensure vendor files are cleanly patched from current stock & bind-mount post-boot
-mkdir -p "$MODDIR/patched_vendor/etc/camera" "$MODDIR/patched_vendor/lib64/hw" 2>/dev/null || true
+mkdir -p "$MODDIR/patched_vendor/etc/camera" "$MODDIR/patched_vendor/lib64/hw" "$MODDIR/patched_vendor/lib64/camera" 2>/dev/null || true
 
 apply_vendor_file() {
   local MODE="$1" KIND="$2" REL="$3"
@@ -91,6 +91,8 @@ apply_vendor_file() {
   if [ ! -f "$SRC" ] || [ "$CUR_STAMP" != "$OLD_STAMP" ]; then
     if [ "$MODE" = "camx" ]; then
       "$PATCHER" patch-camx "$DST" "${SRC}.tmp" >> "$LOG" 2>&1
+    elif [ "$MODE" = "tuned" ]; then
+      "$PATCHER" patch-tuned "$KIND" "$DST" "${SRC}.tmp" >> "$LOG" 2>&1
     else
       "$PATCHER" patch-hal "$KIND" "$DST" "${SRC}.tmp" >> "$LOG" 2>&1
     fi
@@ -127,6 +129,8 @@ apply_vendor_file hal camera_qcom      lib64/hw/camera.qcom.so
 apply_vendor_file hal chi_override     lib64/hw/com.qti.chi.override.so
 apply_vendor_file hal mcreprocrt       lib64/com.qti.feature2.mcreprocrt.so
 apply_vendor_file hal feature2_generic lib64/com.qti.feature2.generic.so
+apply_vendor_file tuned wide           lib64/camera/com.qti.tuned.garnet_aac_ov64b40_wide_i.bin
+apply_vendor_file tuned ultra          lib64/camera/com.qti.tuned.garnet_ofilm_imx355_ultra_global_ii.bin
 
 if [ "$NEED_RESTART" = "1" ]; then
   echo "[RESTART] Restarting camera provider & cameraserver..." >> "$LOG"
