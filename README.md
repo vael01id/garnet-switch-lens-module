@@ -1,12 +1,18 @@
 # Garnet Camera & Lens Switch Fix
 
-Universal Magisk / KernelSU / APatch module to fix multi-camera support and native lens switching on **Poco X6 5G / Redmi Note 13 Pro 5G (`garnet`)**.
+Universal, **zero-overlay anti-bootloop** Magisk / KernelSU / APatch module to fix multi-camera support, native lens switching, and image quality on **Poco X6 5G / Redmi Note 13 Pro 5G (`garnet`)**.
 
 ## Compatibility
 - **Device:** `garnet` (Poco X6 5G / Redmi Note 13 Pro 5G)
-- **ROM:** Universal (HyperOS, AOSP, ColorOS / OxygenOS Ports)
-- **Camera App:** MIUI / Leica Camera (`com.android.camera`) — *not for stock ColorOS/Oplus Camera*
+- **ROM:** Universal — **OxygenOS 16 / ColorOS Ports, Stock HyperOS (CN/Global/ID/EU), and AOSP**
+- **Camera App:** MIUI / Leica Camera (`com.android.camera`) — *auto-falls back to HAL-only mode if APK version differs*
 - **Root:** Magisk / KernelSU / APatch
+
+## Anti-Bootloop Architecture (`v1.3+`)
+- **Zero early-boot `/vendor` or `/system` overlay:** no `$MODPATH/system/`, no `$MODPATH/vendor/`, and no static `system.prop` — impossible to cause stuck boot logo on any ROM or root manager.
+- **Post-boot bind-mounts only (`service.sh` after `sys.boot_completed=1`):** preserves each ROM's exact stock SELinux contexts (`ls -Z` → `chcon`), dynamically appends `com.android.camera` via `resetprop -n` (respecting the 91-char `PROP_VALUE_MAX`), and safely restarts camera HAL once.
+- **Strict ELF64/AArch64 & pattern verification (`garnet_patcher`):** validates ELF headers, RX `PT_LOAD` segment bounds, ARM64 instruction alignment, ADRP+ADD `.rodata` targets, atomic `chi_override` matching, and APK method-anchor thresholds. Incompatible files are skipped cleanly (stock untouched) and logged to `/data/adb/modules/garnet_oos16_uw_fix/patch.log`.
+- **Auto-re-patch on ROM/APK updates:** detects changed stock vendor or APK stamps and re-patches cleanly after updates.
 
 ## What's Fixed
 - Native lens switching (`0.6x` ↔ `1x` ↔ `2x` / `3x` / `5x`) in Photo and Video mode with live zoom slider
@@ -16,12 +22,11 @@ Universal Magisk / KernelSU / APatch module to fix multi-camera support and nati
 - Active `0.6x` UltraWide distortion correction (`applyUltraWideLDC` / `applySATUltraWideLDC` + `enableLDC=TRUE`)
 - Higher video bitrates for cleaner low-light detail (H.264 `1080p30`: 20 → 40 Mbps, `4K30`/`1080p60`: 50 → 75 Mbps; HEVC `1080p30`: 15.4 → 30.8 Mbps, `4K30`: 38.5 → 77 Mbps)
 - 1080p 60fps on main/video zoom, auto fallback to 1080p 30fps on UltraWide, Front, and Macro
-- Dynamic on-device patching (no bloated prebuilt APK/HAL binaries, auto-re-patches on camera app updates)
 
 ## Installation
-1. Download `garnet-camera-fix-v1.2.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest).
+1. Download `garnet-camera-fix-v1.3.zip` from [Releases](https://github.com/vael01id/garnet-switch-lens-module/releases/latest).
 2. Flash in Magisk Manager / KernelSU / APatch.
-3. Reboot.
+3. Reboot (first boot after upgrading from `v1.2` automatically re-patches clean stock vendor post-boot; inspect `/data/adb/modules/garnet_oos16_uw_fix/patch.log` for details).
 
 ## Uninstall
 Remove the module from your root manager and reboot.

@@ -1,6 +1,6 @@
 id=garnet_oos16_uw_fix
 name=Garnet Native Lens Switch & Camera Fix
-version=v1.2
-versionCode=120
+version=v1.3
+versionCode=130
 author=Vael
-description=Universal camera & lens switch fix for garnet (Poco X6 5G / Redmi Note 13 Pro 5G): native Photo/Video SAT lens switching, smooth 0.6x-5x zoom, surgical Titan570 Luma-only NR bypass (ANR101 YLPF/DCBlend2 + TF201 Y=0 while keeping 100% Chroma NR clean, Edge=OFF, sharpness=0), active 0.6x UltraWide LDC, boosted H.264/HEVC video bitrates, and FHD60 with auto UW 30fps clamp.
+description=Universal zero-overlay anti-bootloop camera & lens switch fix for garnet (OOS16, HyperOS CN/Global/ID/EU, AOSP; Magisk/KSU/APatch): post-boot bind-mounts only (zero early-boot /vendor overlay), strict ELF/pattern checks with safe fallback, native Photo/Video SAT lens switching, surgical Titan570 Luma-only NR bypass (100% Chroma NR active), active 0.6x UW LDC, and boosted video bitrates.
