@@ -77,7 +77,7 @@ LZ1L_NEW = (
 
 # Common->M0()[F: smooth ~335-355ms ease-out spline timing on L0=[0.5,1,2,5,10,15,50,125]
 M0_EXP_HEX = struct.pack("<8f", 0.0, 126.0, 253.0, 420.0, 547.0, 621.0, 840.0, 1000.0).hex()
-M0_NEW_HEX = struct.pack("<8f", 0.0, 425.0, 765.0, 1120.0, 1390.0, 1550.0, 1950.0, 2250.0).hex()
+M0_NEW_HEX = struct.pack("<8f", 0.0, 570.0, 1025.0, 1500.0, 1860.0, 2080.0, 2610.0, 3015.0).hex()
 
 DEX_PATCHES = {
     "classes.dex": [
@@ -89,11 +89,11 @@ DEX_PATCHES = {
         ("Lb0/U;->v (unlock FHD60 SAT maxFps cap)", 0x6F66AC, "59cfff74", "00000000"),
         ("Lb0/p0;->getValueDisplayString (Pro Mode crash fix)", 0x6FE458, "6e300ca22100", "6f304aa72100"),
         ("FragmentDualCameraAdjust;->Zh (live bidirectional 1x<->0.6x slider)", 0x7C4026, "39002000", "28200000"),
-        ("FragmentDualCameraAdjust;->bi (DecelerateInterpolator ease-out)", 0x7C4958, "2205cc0b701002290500", "2205c90b7010ff280500"),
+        ("FragmentDualCameraAdjust;->bi (PathInterpolator 0,0.5625,0,1 extreme ease-out)", 0x7C494A, "54a43f806e107316040054a43f802205cc0b7010022905006e207b16540054a43f80", "6e10731604002205ce0b12061507103f1508803f7058072965676e207b1654000000"),
         ("FragmentDualCameraAdjust;->notifyAfterFrameAvailable (enable spline bi for SAT)", 0x7C6E0E, "62005b0354005d036e10a5f200000a003800110059685f80", "123000000000000000000000000000000000000059605f80"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y DecelerateInterpolator)", 0x7C7E46, "220ecc0b701002290e00", "220ec90b7010ff280e00"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 335ms)", 0x7C7EDC, "160e6400", "160e4f01"),
-        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 335ms)", 0x7C7EF8, "160e9600", "160e4f01"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y LinearOutSlowInInterpolator)", 0x7C7E46, "220ecc0b701002290e00", "220ecc167010177a0e00"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 100ms -> 450ms)", 0x7C7EDC, "160e6400", "160ec201"),
+        ("FragmentDualCameraAdjust;->provideAnimateElement (fallback Y 150ms -> 450ms)", 0x7C7EF8, "160e9600", "160ec201"),
     ],
     "classes2.dex": [
         ("LD3/e;->C()I (Native Photo SAT roleId 60 -> 62 = cameraId 4)", 0x4B797C, "13033c00", "13033e00"),
